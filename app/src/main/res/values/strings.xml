@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Orion Player</string>
+    <string name="pairing_title">Device Pairing</string>
+    <string name="pairing_instruction">Go to your Orion CMS dashboard, click Add Device, and enter this code:</string>
+    <string name="pairing_waiting">Waiting for pairing…</string>
+    <string name="playback_no_content">No content assigned to this display. Please assign a playlist in the CMS.</string>
+    <string name="error_connection">Connection error. Retrying…</string>
+    <string name="error_retry">Retry</string>
+</resources>
