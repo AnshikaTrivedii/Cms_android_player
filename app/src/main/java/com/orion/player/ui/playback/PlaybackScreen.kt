@@ -65,7 +65,7 @@ fun PlaybackScreen(
             is PlaybackUiState.NoContent -> NoContentState()
             is PlaybackUiState.Playing -> PlayingState(
                 state = state,
-                onVideoCompleted = { viewModel.onVideoCompleted() },
+                onVideoCompleted = { viewModel.onVideoCompleted(it) },
                 onAssetFailed = { viewModel.onAssetFailed(it) }
             )
             is PlaybackUiState.Error -> ErrorState(
@@ -153,7 +153,7 @@ private fun NoContentState() {
 @Composable
 private fun PlayingState(
     state: PlaybackUiState.Playing,
-    onVideoCompleted: () -> Unit,
+    onVideoCompleted: (String) -> Unit,
     onAssetFailed: (String) -> Unit
 ) {
     // Use Crossfade for smooth transitions between assets
@@ -199,7 +199,7 @@ private fun PlayingState(
             "VIDEO" -> {
                 VideoPlayer(
                     file = localFile,
-                    onCompleted = onVideoCompleted,
+                    onCompleted = { onVideoCompleted(asset.id) },
                     onError = { onAssetFailed(asset.name) },
                     modifier = Modifier.fillMaxSize()
                 )

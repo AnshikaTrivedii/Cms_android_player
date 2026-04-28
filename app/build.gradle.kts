@@ -19,7 +19,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Default backend URL — override via BuildConfig or build flavors
-        buildConfigField("String", "BASE_URL", "\"http://10.0.2.2:3001/api/\"")
+        buildConfigField("String", "BASE_URL", "\"https://orion-api-5dgf.onrender.com/api/\"")
     }
 
     buildTypes {
@@ -41,9 +41,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
 
     buildFeatures {
         compose = true

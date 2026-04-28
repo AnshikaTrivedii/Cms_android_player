@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -91,9 +92,9 @@ class ContentRepository @Inject constructor(
      * Returns the local file path for a given asset.
      */
     fun getLocalFile(asset: AssetInfo): File {
-        // Use asset ID + extension as filename to avoid collisions
+        // Include mutable metadata so updated assets don't reuse stale cached files.
         val extension = asset.name.substringAfterLast('.', "bin")
-        return File(cacheDir, "${asset.id}.$extension")
+        return File(cacheDir, "${asset.cacheKey()}.$extension")
     }
 
     /**
@@ -107,12 +108,34 @@ class ContentRepository @Inject constructor(
     /**
      * Cleans up cached files that are no longer in the current playlist.
      */
-    suspend fun cleanupStaleCache(currentAssetIds: Set<String>) = withContext(Dispatchers.IO) {
+    suspend fun cleanupStaleCache(currentCacheKeys: Set<String>) = withContext(Dispatchers.IO) {
         cacheDir.listFiles()?.forEach { file ->
-            val assetId = file.nameWithoutExtension
-            if (assetId !in currentAssetIds) {
+            val cacheKey = file.nameWithoutExtension
+            if (cacheKey !in currentCacheKeys) {
                 file.delete()
             }
         }
+    }
+
+    fun getCacheKey(asset: AssetInfo): String = asset.cacheKey()
+
+    private fun AssetInfo.cacheKey(): String {
+        val fingerprint = listOf(
+            id,
+            name,
+            type,
+            mimeType,
+            durationSeconds.toString(),
+            position.toString(),
+            downloadUrl.orEmpty(),
+            fileSize.toString()
+        ).joinToString("|")
+
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest(fingerprint.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+            .take(12)
+
+        return "${id}_$hash"
     }
 }
