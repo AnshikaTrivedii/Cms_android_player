@@ -40,6 +40,7 @@ class ContentRepository @Inject constructor(
 
     /**
      * Downloads an asset to local cache if not already cached.
+     * Uses a temporary file during download to prevent corrupted partial files.
      * Returns the local File path, or null on failure.
      */
     suspend fun downloadAsset(asset: AssetInfo): File? = withContext(Dispatchers.IO) {
@@ -52,6 +53,10 @@ class ContentRepository @Inject constructor(
 
         val downloadUrl = asset.downloadUrl ?: return@withContext null
 
+        // Download to a temporary file first, then rename on success.
+        // This prevents corrupted partial files if the download is interrupted.
+        val tempFile = File(cacheDir, "${localFile.name}.tmp")
+
         try {
             val request = Request.Builder().url(downloadUrl).build()
             val response = okHttpClient.newCall(request).execute()
@@ -59,30 +64,51 @@ class ContentRepository @Inject constructor(
             if (!response.isSuccessful) return@withContext null
 
             response.body?.byteStream()?.use { input ->
-                localFile.outputStream().use { output ->
+                tempFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
 
-            localFile
+            // Verify downloaded size matches expected size
+            if (asset.fileSize > 0 && tempFile.length() != asset.fileSize.toLong()) {
+                tempFile.delete()
+                return@withContext null
+            }
+
+            // Atomic rename: temp → final
+            if (tempFile.renameTo(localFile)) {
+                localFile
+            } else {
+                // renameTo can fail on some filesystems; fall back to copy + delete
+                tempFile.copyTo(localFile, overwrite = true)
+                tempFile.delete()
+                localFile
+            }
         } catch (e: Exception) {
             e.printStackTrace()
+            // Clean up partial temp file on failure
+            tempFile.delete()
             null
         }
     }
 
     /**
      * Downloads all assets from a sync response that aren't already cached.
+     * Reports progress via the optional [onProgress] callback (completed count, total count).
      * Returns a map of asset ID → local File.
      */
-    suspend fun downloadAllAssets(assets: List<AssetInfo>): Map<String, File> {
+    suspend fun downloadAllAssets(
+        assets: List<AssetInfo>,
+        onProgress: ((completed: Int, total: Int) -> Unit)? = null
+    ): Map<String, File> {
         val result = mutableMapOf<String, File>()
 
-        for (asset in assets) {
+        for ((index, asset) in assets.withIndex()) {
             val file = downloadAsset(asset)
             if (file != null) {
                 result[asset.id] = file
             }
+            onProgress?.invoke(index + 1, assets.size)
         }
 
         return result
@@ -110,6 +136,9 @@ class ContentRepository @Inject constructor(
      */
     suspend fun cleanupStaleCache(currentCacheKeys: Set<String>) = withContext(Dispatchers.IO) {
         cacheDir.listFiles()?.forEach { file ->
+            // Skip temp files — they may be actively downloading
+            if (file.name.endsWith(".tmp")) return@forEach
+
             val cacheKey = file.nameWithoutExtension
             if (cacheKey !in currentCacheKeys) {
                 file.delete()

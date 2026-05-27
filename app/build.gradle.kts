@@ -37,6 +37,7 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -49,6 +50,9 @@ android {
 }
 
 dependencies {
+    // Core Library Desugaring (java.time support on API < 26)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
+
     // AndroidX Core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

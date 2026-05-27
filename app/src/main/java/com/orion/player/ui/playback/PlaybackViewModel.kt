@@ -80,13 +80,17 @@ class PlaybackViewModel @Inject constructor(
                 playlistInfo = syncResponse.playlist
                 assets = syncResponse.assets.sortedBy { it.position }
 
-                // Download all assets
+                // Download all assets with progress tracking
                 _uiState.value = PlaybackUiState.Downloading(0, assets.size)
 
-                localFiles = contentRepository.downloadAllAssets(assets)
+                localFiles = contentRepository.downloadAllAssets(assets) { completed, total ->
+                    _uiState.value = PlaybackUiState.Downloading(completed, total)
+                }
 
-                // Clean up old cached files
-                contentRepository.cleanupStaleCache(assets.map { it.id }.toSet())
+                // Clean up old cached files using correct cache keys
+                contentRepository.cleanupStaleCache(
+                    assets.map { contentRepository.getCacheKey(it) }.toSet()
+                )
 
                 if (localFiles.isEmpty()) {
                     _uiState.value = PlaybackUiState.Error("Failed to download content")
@@ -245,7 +249,9 @@ class PlaybackViewModel @Inject constructor(
                     if (currentIds != newIds || syncResponse.playlist != playlistInfo) {
                         // Download any new assets
                         val newFiles = contentRepository.downloadAllAssets(newAssets)
-                        contentRepository.cleanupStaleCache(newIds)
+                        contentRepository.cleanupStaleCache(
+                            newAssets.map { contentRepository.getCacheKey(it) }.toSet()
+                        )
 
                         // Update state
                         assets = newAssets

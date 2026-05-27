@@ -205,9 +205,14 @@ private fun PlayingState(
                 )
             }
             "HTML" -> {
-                val url = asset.downloadUrl ?: localFile.toURI().toString()
+                // Prefer local cached file; fall back to remote URL
+                val htmlUrl = if (localFile.exists()) {
+                    localFile.toURI().toString()
+                } else {
+                    asset.downloadUrl ?: localFile.toURI().toString()
+                }
                 HtmlPlayer(
-                    url = url,
+                    url = htmlUrl,
                     modifier = Modifier.fillMaxSize()
                 )
             }

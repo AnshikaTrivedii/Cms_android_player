@@ -15,7 +15,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 
 /**
  * Full-screen HTML content player using WebView.
- * Loads a URL and renders it for the specified duration.
+ * Loads from a local file path when available, falling back to remote URL.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -25,7 +25,10 @@ fun HtmlPlayer(
 ) {
     val context = LocalContext.current
 
-    val webView = remember {
+    // Key the WebView on the URL so a new instance is created for each different URL.
+    // This avoids the lifecycle conflict where destroy() is called on a remembered instance
+    // that would be reused for a different URL.
+    val webView = remember(url) {
         WebView(context).apply {
             webViewClient = WebViewClient()
             webChromeClient = WebChromeClient()
@@ -38,17 +41,20 @@ fun HtmlPlayer(
                 mediaPlaybackRequiresUserGesture = false
                 cacheMode = WebSettings.LOAD_DEFAULT
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                // Allow file access for locally cached HTML content
+                allowFileAccess = true
             }
 
             // Disable scrolling for signage display
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
             setBackgroundColor(android.graphics.Color.BLACK)
+
+            loadUrl(url)
         }
     }
 
     DisposableEffect(url) {
-        webView.loadUrl(url)
         onDispose {
             webView.stopLoading()
             webView.destroy()
