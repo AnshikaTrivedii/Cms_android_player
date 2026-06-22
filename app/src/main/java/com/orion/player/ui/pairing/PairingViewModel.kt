@@ -1,20 +1,21 @@
 package com.orion.player.ui.pairing
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.orion.player.data.repository.PairingRepository
+import com.orion.player.util.ApiErrorParser.readableMessage
+import com.orion.player.util.NetworkDiagnostics
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 import javax.inject.Inject
 
-/**
- * ViewModel managing the pairing screen state machine:
- * Loading → ShowCode → Polling → Paired / Error
- */
 @HiltViewModel
 class PairingViewModel @Inject constructor(
     private val pairingRepository: PairingRepository
@@ -24,73 +25,82 @@ class PairingViewModel @Inject constructor(
     val uiState: StateFlow<PairingUiState> = _uiState.asStateFlow()
 
     private var hardwareId: String = ""
+    private var pairingJob: Job? = null
 
     init {
         startPairing()
     }
 
     private fun startPairing() {
-        viewModelScope.launch {
+        pairingJob?.cancel()
+        pairingJob = viewModelScope.launch {
             try {
                 _uiState.value = PairingUiState.Loading
-
-                // Get or create hardware ID
                 hardwareId = pairingRepository.getHardwareId()
+                Log.d(TAG, "startPairing hardwareId=$hardwareId")
 
-                // Check if already paired
                 if (pairingRepository.isAlreadyPaired()) {
                     _uiState.value = PairingUiState.Paired
                     return@launch
                 }
 
-                // Init pairing — get the code
                 val response = pairingRepository.initPairing(hardwareId)
 
                 if (response.isPaired) {
-                    _uiState.value = PairingUiState.Paired
+                    _uiState.value = PairingUiState.Error(
+                        "Device is registered on the server but not on this player.\n" +
+                            "Unpair from CMS, then tap Retry."
+                    )
                     return@launch
                 }
 
-                val code = response.pairingCode ?: run {
-                    _uiState.value = PairingUiState.Error("Failed to get pairing code")
+                val code = response.pairingCode?.takeIf { it.isNotBlank() } ?: run {
+                    _uiState.value = PairingUiState.Error("Failed to get pairing code from server")
                     return@launch
                 }
 
+                val pairingSecret = response.pairingSecret?.takeIf { it.isNotBlank() } ?: run {
+                    _uiState.value = PairingUiState.Error(
+                        "Failed to get pairing secret from server.\nTap Retry."
+                    )
+                    return@launch
+                }
+
+                Log.d(TAG, "Showing pairing code=$code")
                 _uiState.value = PairingUiState.ShowCode(code)
 
-                // Start polling for pairing completion
-                pairingRepository.pollPairingStatus(hardwareId)
+                pairingRepository.pollPairingStatus(hardwareId, pairingSecret)
                     .catch { e ->
-                        _uiState.value = PairingUiState.Error(
-                            e.message ?: "Pairing failed. Please check your connection."
-                        )
+                        Log.e(TAG, "Pairing poll failed after retries", e)
+                        _uiState.value = PairingUiState.Error(formatError("GET /player/pairing-status", e))
                     }
                     .collect { status ->
                         if (status.isPaired) {
                             _uiState.value = PairingUiState.Paired
                         }
-                        // Non-paired statuses continue polling (flow keeps emitting)
                     }
-
             } catch (e: Exception) {
-                _uiState.value = PairingUiState.Error(
-                    e.message ?: "Failed to initialize pairing. Please check your connection."
-                )
+                Log.e(TAG, "startPairing failed", e)
+                _uiState.value = PairingUiState.Error(formatError("POST /player/init-pairing", e))
             }
         }
     }
 
-    /**
-     * Retry pairing from the beginning (called from error state).
-     */
+    private fun formatError(endpoint: String, e: Throwable): String = when (e) {
+        is HttpException -> "$endpoint failed:\n${e.readableMessage()}"
+        else -> NetworkDiagnostics.userMessage(endpoint, e)
+    }
+
     fun retry() {
+        pairingRepository.clearPairing()
         startPairing()
+    }
+
+    companion object {
+        private const val TAG = "OrionPairing"
     }
 }
 
-/**
- * Sealed class representing all possible pairing screen states.
- */
 sealed class PairingUiState {
     data object Loading : PairingUiState()
     data class ShowCode(val pairingCode: String) : PairingUiState()

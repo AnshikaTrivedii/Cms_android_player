@@ -1,38 +1,48 @@
 package com.orion.player.data.repository
 
+import android.util.Log
+import com.orion.player.data.analytics.PopLogRecord
+import com.orion.player.data.local.HeartbeatQueueDao
 import com.orion.player.data.local.PopLogDao
-import com.orion.player.data.local.PopLogEntity
+import com.orion.player.data.local.QueuedHeartbeatEntity
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.remote.HeartbeatRequest
+import com.orion.player.data.remote.HeartbeatResponse
 import com.orion.player.data.remote.OrionPlayerApi
 import com.orion.player.data.remote.PopLogEntry
 import com.orion.player.data.remote.PopLogsRequest
+import com.orion.player.util.SessionGuard
+import retrofit2.HttpException
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Repository for device health telemetry and Proof-of-Play analytics.
- * Handles heartbeat sending, PoP log queuing, and batch flushing.
+ * Queues data locally when offline and flushes after reconnect.
  */
 @Singleton
 class TelemetryRepository @Inject constructor(
     private val api: OrionPlayerApi,
     private val popLogDao: PopLogDao,
-    private val securePrefs: SecurePrefs
+    private val heartbeatQueueDao: HeartbeatQueueDao,
+    private val securePrefs: SecurePrefs,
+    private val sessionGuard: SessionGuard
 ) {
-    /**
-     * Sends a heartbeat to the backend with device health metrics.
-     * Returns true on success, false on failure.
-     */
+    companion object {
+        private const val TAG = "OrionTelemetry"
+        private const val FLUSH_BATCH_SIZE = 50
+    }
+
     suspend fun sendHeartbeat(
         cpu: Int,
         ram: Int,
         temp: Int,
         currentContent: String? = null
-    ): Boolean {
-        val token = securePrefs.getBearerToken() ?: return false
+    ): HeartbeatResponse? {
+        if (!sessionGuard.isPairedWithToken()) return null
+        val token = sessionGuard.requirePairedToken()
         return try {
-            api.sendHeartbeat(
+            val response = api.sendHeartbeat(
                 token = token,
                 body = HeartbeatRequest(
                     cpu = cpu,
@@ -41,69 +51,121 @@ class TelemetryRepository @Inject constructor(
                     currentContent = currentContent
                 )
             )
-            true
+            flushQueuedHeartbeats()
+            response
         } catch (e: Exception) {
-            e.printStackTrace()
-            false
+            Log.w(TAG, "Heartbeat failed, queuing locally: ${e.message}")
+            queueHeartbeat(cpu, ram, temp, currentContent)
+            null
         }
     }
 
-    /**
-     * Queues a Proof-of-Play log entry in the local Room database.
-     */
-    suspend fun queuePopLog(
-        content: String,
-        status: String,
-        timestamp: String
+    private suspend fun queueHeartbeat(
+        cpu: Int,
+        ram: Int,
+        temp: Int,
+        currentContent: String?
     ) {
-        popLogDao.insert(
-            PopLogEntity(
-                content = content,
-                status = status,
-                timestamp = timestamp
+        heartbeatQueueDao.insert(
+            QueuedHeartbeatEntity(
+                cpu = cpu,
+                ram = ram,
+                temp = temp,
+                currentContent = currentContent,
+                recordedAt = System.currentTimeMillis()
             )
         )
     }
 
-    /**
-     * Flushes unsynced PoP logs to the backend.
-     * On success, marks them as synced and cleans up.
-     * Returns the number of logs successfully synced.
-     */
-    suspend fun flushPopLogs(): Int {
-        val token = securePrefs.getBearerToken() ?: return 0
-        val unsynced = popLogDao.getUnsynced(50)
+    suspend fun flushQueuedHeartbeats(): Int {
+        if (!sessionGuard.isPairedWithToken()) return 0
+        val token = sessionGuard.requirePairedToken()
+        var flushed = 0
 
-        if (unsynced.isEmpty()) return 0
+        while (true) {
+            val batch = heartbeatQueueDao.getUnsynced(limit = 10)
+            if (batch.isEmpty()) break
 
-        return try {
-            val logEntries = unsynced.map { entity ->
-                PopLogEntry(
-                    content = entity.content,
-                    status = entity.status,
-                    timestamp = entity.timestamp
-                )
+            try {
+                for (heartbeat in batch) {
+                    api.sendHeartbeat(
+                        token = token,
+                        body = HeartbeatRequest(
+                            cpu = heartbeat.cpu,
+                            ram = heartbeat.ram,
+                            temp = heartbeat.temp,
+                            currentContent = heartbeat.currentContent
+                        )
+                    )
+                }
+                val ids = batch.map { it.id }
+                heartbeatQueueDao.markSynced(ids)
+                heartbeatQueueDao.deleteSynced()
+                flushed += batch.size
+            } catch (e: Exception) {
+                Log.w(TAG, "Heartbeat flush failed: ${e.message}")
+                break
             }
-
-            val response = api.submitPopLogs(
-                token = token,
-                body = PopLogsRequest(logs = logEntries)
-            )
-
-            // Mark as synced and clean up
-            val ids = unsynced.map { it.id }
-            popLogDao.markSynced(ids)
-            popLogDao.deleteSynced()
-
-            response.received
-        } catch (e: Exception) {
-            e.printStackTrace()
-            0
         }
+
+        return flushed
     }
 
-    /**
-     * Returns the count of unsynced PoP logs.
-     */
-    suspend fun getUnsyncedCount(): Int = popLogDao.getUnsyncedCount()
+    suspend fun queuePopLog(record: PopLogRecord) {
+        popLogDao.insert(record.toEntity())
+        val synced = flushPopLogs()
+        Log.d(TAG, "Queued PoP for ${record.assetName} (${record.status}), synced=$synced")
+    }
+
+    suspend fun flushPopLogs(): Int {
+        if (!sessionGuard.isPairedWithToken()) return 0
+        val token = sessionGuard.requirePairedToken()
+        var totalSynced = 0
+
+        while (true) {
+            val unsynced = popLogDao.getUnsynced(FLUSH_BATCH_SIZE)
+            if (unsynced.isEmpty()) break
+
+            try {
+                val logEntries = unsynced.map { it.toApiEntry() }
+                val response = api.submitPopLogs(
+                    token = token,
+                    body = PopLogsRequest(logs = logEntries)
+                )
+
+                val ids = unsynced.map { it.id }
+                popLogDao.markSynced(ids)
+                popLogDao.deleteSynced()
+                totalSynced += response.received
+                Log.d(TAG, "Flushed ${response.received} PoP log(s)")
+            } catch (e: HttpException) {
+                val errorBody = e.response()?.errorBody()?.string()
+                Log.e(TAG, "PoP flush failed: HTTP ${e.code()} $errorBody", e)
+                break
+            } catch (e: Exception) {
+                Log.e(TAG, "PoP flush failed: ${e.message}", e)
+                break
+            }
+        }
+
+        return totalSynced
+    }
+
+    suspend fun flushAll() {
+        flushQueuedHeartbeats()
+        flushPopLogs()
+    }
+
+    suspend fun getUnsyncedPopCount(): Int = popLogDao.getUnsyncedCount()
+
+    private fun com.orion.player.data.local.PopLogEntity.toApiEntry() =
+        PopLogEntry(
+            assetName = assetName,
+            playlistName = playlistName,
+            campaignName = campaignName,
+            startTime = startTime,
+            endTime = endTime,
+            durationSeconds = durationSeconds,
+            status = status
+        )
 }

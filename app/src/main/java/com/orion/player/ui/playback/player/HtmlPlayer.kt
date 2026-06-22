@@ -8,7 +8,10 @@ import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -21,16 +24,35 @@ import androidx.compose.ui.viewinterop.AndroidView
 @Composable
 fun HtmlPlayer(
     url: String,
+    onLoadSuccess: () -> Unit = {},
+    onLoadFailed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    var loadReported by remember(url) { mutableStateOf(false) }
 
-    // Key the WebView on the URL so a new instance is created for each different URL.
-    // This avoids the lifecycle conflict where destroy() is called on a remembered instance
-    // that would be reused for a different URL.
     val webView = remember(url) {
         WebView(context).apply {
-            webViewClient = WebViewClient()
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, finishedUrl: String?) {
+                    if (!loadReported) {
+                        loadReported = true
+                        onLoadSuccess()
+                    }
+                }
+
+                override fun onReceivedError(
+                    view: WebView?,
+                    errorCode: Int,
+                    description: String?,
+                    failingUrl: String?
+                ) {
+                    if (!loadReported) {
+                        loadReported = true
+                        onLoadFailed()
+                    }
+                }
+            }
             webChromeClient = WebChromeClient()
 
             settings.apply {
@@ -41,11 +63,9 @@ fun HtmlPlayer(
                 mediaPlaybackRequiresUserGesture = false
                 cacheMode = WebSettings.LOAD_DEFAULT
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                // Allow file access for locally cached HTML content
                 allowFileAccess = true
             }
 
-            // Disable scrolling for signage display
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
             setBackgroundColor(android.graphics.Color.BLACK)

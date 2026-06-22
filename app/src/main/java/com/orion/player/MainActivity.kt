@@ -9,9 +9,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
+import com.orion.player.data.local.SecurePrefs
 import com.orion.player.ui.navigation.OrionNavGraph
+import com.orion.player.ui.navigation.Routes
 import com.orion.player.ui.theme.OrionPlayerTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 /**
  * Single Activity host for the Orion Player.
@@ -20,8 +23,15 @@ import dagger.hilt.android.AndroidEntryPoint
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    @Inject lateinit var securePrefs: SecurePrefs
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Clear stale paired flag left from older builds without a valid token
+        if (securePrefs.isPaired && securePrefs.deviceToken.isNullOrBlank()) {
+            securePrefs.clearCredentials()
+        }
 
         // Keep screen on at all times (digital signage requirement)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -30,9 +40,17 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setupImmersiveMode()
 
+        val startDestination = if (
+            securePrefs.isPaired && !securePrefs.deviceToken.isNullOrBlank()
+        ) {
+            Routes.PLAYBACK
+        } else {
+            Routes.PAIRING
+        }
+
         setContent {
             OrionPlayerTheme {
-                OrionNavGraph()
+                OrionNavGraph(startDestination = startDestination)
             }
         }
     }

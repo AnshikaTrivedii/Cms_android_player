@@ -31,7 +31,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.orion.player.data.remote.AssetType
+import com.orion.player.data.remote.AssetType.normalizedType
 import com.orion.player.ui.playback.player.HtmlPlayer
+import com.orion.player.ui.playback.player.ImagePlayer
+import com.orion.player.ui.playback.ticker.TickerOverlay
+import com.orion.player.ui.playback.ticker.toAlignment
 import com.orion.player.ui.playback.player.ImagePlayer
 import com.orion.player.ui.playback.player.VideoPlayer
 
@@ -62,12 +67,27 @@ fun PlaybackScreen(
         when (val state = uiState) {
             is PlaybackUiState.Loading -> LoadingState()
             is PlaybackUiState.Downloading -> DownloadingState(state.current, state.total)
-            is PlaybackUiState.NoContent -> NoContentState()
-            is PlaybackUiState.Playing -> PlayingState(
-                state = state,
-                onVideoCompleted = { viewModel.onVideoCompleted(it) },
-                onAssetFailed = { viewModel.onAssetFailed(it) }
+            is PlaybackUiState.WaitingForInitialDownload -> WaitingForInitialDownloadState(
+                onRetry = { viewModel.retry() }
             )
+            is PlaybackUiState.NoContent -> NoContentState()
+            is PlaybackUiState.Playing -> {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    PlayingState(
+                        state = state,
+                        onAssetFailed = { viewModel.onAssetFailed(it) },
+                        onPlaybackStarted = { viewModel.onPlaybackStarted(it) },
+                        onUrlLoadSuccess = { viewModel.onUrlLoadSuccess(it) },
+                        onUrlLoadFailed = { viewModel.onUrlLoadFailed(it) }
+                    )
+                    state.ticker?.let { ticker ->
+                        TickerOverlay(
+                            config = ticker,
+                            modifier = Modifier.align(ticker.position.toAlignment())
+                        )
+                    }
+                }
+            }
             is PlaybackUiState.Error -> ErrorState(
                 message = state.message,
                 onRetry = { viewModel.retry() }
@@ -121,6 +141,45 @@ private fun DownloadingState(current: Int, total: Int) {
 }
 
 @Composable
+private fun WaitingForInitialDownloadState(onRetry: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(48.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Default.CloudOff,
+            contentDescription = "Waiting for content",
+            tint = Color(0xFF6C63FF),
+            modifier = Modifier.size(64.dp)
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = "Waiting for Initial Content Download",
+            color = Color.White,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = "Connect to the internet and assign a playlist\nin the Orion CMS dashboard.",
+            color = Color(0xFFB0B0C0),
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(
+            onClick = onRetry,
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6C63FF))
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = "Retry")
+            Text("  Retry", modifier = Modifier.padding(start = 4.dp))
+        }
+    }
+}
+
+@Composable
 private fun NoContentState() {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -153,10 +212,11 @@ private fun NoContentState() {
 @Composable
 private fun PlayingState(
     state: PlaybackUiState.Playing,
-    onVideoCompleted: (String) -> Unit,
-    onAssetFailed: (String) -> Unit
+    onAssetFailed: (String) -> Unit,
+    onPlaybackStarted: (String) -> Unit,
+    onUrlLoadSuccess: (String) -> Unit,
+    onUrlLoadFailed: (String) -> Unit
 ) {
-    // Use Crossfade for smooth transitions between assets
     Crossfade(
         targetState = state.currentIndex,
         animationSpec = tween(durationMillis = 800),
@@ -165,69 +225,100 @@ private fun PlayingState(
         val asset = state.asset
         val localFile = state.localFile
 
-        if (localFile == null) {
-            // Asset not available locally
-            Box(
-                modifier = Modifier.fillMaxSize().background(Color.Black),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Default.CloudOff,
-                        contentDescription = "Asset unavailable",
-                        tint = Color(0xFF6C63FF),
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Asset unavailable",
-                        color = Color(0xFFB0B0C0),
-                        fontSize = 14.sp
-                    )
+        when (asset.normalizedType()) {
+            AssetType.IMAGE -> {
+                if (localFile == null) {
+                    UnavailableAssetPlaceholder()
+                    return@Crossfade
                 }
+                ImagePlayer(file = localFile, modifier = Modifier.fillMaxSize())
             }
-            return@Crossfade
-        }
-
-        when (asset.type.uppercase()) {
-            "IMAGE" -> {
-                ImagePlayer(
-                    file = localFile,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            "VIDEO" -> {
+            AssetType.VIDEO -> {
+                if (localFile == null) {
+                    UnavailableAssetPlaceholder()
+                    return@Crossfade
+                }
                 VideoPlayer(
                     file = localFile,
-                    onCompleted = { onVideoCompleted(asset.id) },
+                    configuredDurationSeconds = asset.durationSeconds,
+                    onPlaybackStarted = { onPlaybackStarted(asset.name) },
                     onError = { onAssetFailed(asset.name) },
                     modifier = Modifier.fillMaxSize()
                 )
             }
-            "HTML" -> {
-                // Prefer local cached file; fall back to remote URL
-                val htmlUrl = if (localFile.exists()) {
-                    localFile.toURI().toString()
-                } else {
-                    asset.downloadUrl ?: localFile.toURI().toString()
+            AssetType.HTML, AssetType.URL -> {
+                if (localFile == null || !localFile.exists()) {
+                    UnavailableAssetPlaceholder()
+                    return@Crossfade
                 }
                 HtmlPlayer(
-                    url = htmlUrl,
+                    url = localFile.toURI().toString(),
+                    onLoadSuccess = {
+                        if (asset.normalizedType() == AssetType.URL) {
+                            onUrlLoadSuccess(asset.name)
+                        } else {
+                            onPlaybackStarted(asset.name)
+                        }
+                    },
+                    onLoadFailed = {
+                        if (asset.normalizedType() == AssetType.URL) {
+                            onUrlLoadFailed(asset.name)
+                        } else {
+                            onAssetFailed(asset.name)
+                        }
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             }
-            else -> {
-                // Unsupported type — show placeholder
-                Box(
-                    modifier = Modifier.fillMaxSize().background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "Unsupported: ${asset.type}",
-                        color = Color(0xFFB0B0C0)
-                    )
-                }
+            AssetType.DOCUMENT -> {
+                UnsupportedAssetPlaceholder(
+                    label = "Document playback not supported",
+                    subtitle = asset.name
+                )
             }
+            else -> {
+                UnsupportedAssetPlaceholder(
+                    label = "Unsupported: ${asset.type}",
+                    subtitle = asset.name
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UnavailableAssetPlaceholder() {
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = Icons.Default.CloudOff,
+                contentDescription = "Asset unavailable",
+                tint = Color(0xFF6C63FF),
+                modifier = Modifier.size(48.dp)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Asset unavailable",
+                color = Color(0xFFB0B0C0),
+                fontSize = 14.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun UnsupportedAssetPlaceholder(label: String, subtitle: String) {
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = label, color = Color(0xFFB0B0C0), fontSize = 14.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(text = subtitle, color = Color(0xFF6C63FF), fontSize = 12.sp)
         }
     }
 }

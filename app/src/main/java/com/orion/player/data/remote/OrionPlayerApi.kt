@@ -4,7 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
-import retrofit2.http.Path
+import retrofit2.http.Url
 
 /**
  * Retrofit interface matching the Orion Player API contracts.
@@ -19,10 +19,8 @@ interface OrionPlayerApi {
         @Body body: InitPairingRequest
     ): InitPairingResponse
 
-    @GET("player/pairing-status/{hardwareId}")
-    suspend fun getPairingStatus(
-        @Path("hardwareId") hardwareId: String
-    ): PairingStatusResponse
+    @GET
+    suspend fun getPairingStatusByUrl(@Url url: String): PairingStatusResponse
 
     // ── Authenticated (device token) ───────────────────────
 
@@ -36,6 +34,11 @@ interface OrionPlayerApi {
     suspend fun syncPlaylist(
         @Header("Authorization") token: String
     ): SyncResponse
+
+    @GET("player/sync-revision")
+    suspend fun getSyncRevision(
+        @Header("Authorization") token: String
+    ): SyncRevisionResponse
 
     @POST("player/pop-logs")
     suspend fun submitPopLogs(

@@ -5,14 +5,19 @@ import androidx.room.PrimaryKey
 
 /**
  * Room entity for offline Proof-of-Play log queue.
- * PoP entries are queued locally and flushed to the backend every 5 minutes.
+ * Stores detailed playback analytics and flushes to the backend when online.
  */
 @Entity(tableName = "pop_logs")
 data class PopLogEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val content: String,        // Asset name
-    val status: String,         // "VERIFIED" or "FAILED"
-    val timestamp: String,      // ISO 8601 string
+    val deviceName: String,
+    val playlistName: String,
+    val campaignName: String,
+    val assetName: String,
+    val startTime: String,       // ISO 8601
+    val endTime: String,         // ISO 8601
+    val durationSeconds: Int,
+    val status: String,          // "VERIFIED" or "FAILED"
     val isSynced: Boolean = false
 )

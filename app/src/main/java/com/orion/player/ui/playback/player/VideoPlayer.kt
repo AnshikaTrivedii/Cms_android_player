@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -16,22 +17,27 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
 import java.io.File
 
 /**
  * Full-screen video player using Media3 ExoPlayer.
- * Plays a local file and notifies when playback completes.
+ * Playback is capped at [configuredDurationSeconds] (Option B).
+ * Advancement to the next asset is driven by [PlaybackViewModel], not video end.
  */
 @Composable
 fun VideoPlayer(
     file: File,
-    onCompleted: () -> Unit,
+    configuredDurationSeconds: Int,
+    onPlaybackStarted: () -> Unit,
     onError: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val configuredDurationMs = configuredDurationSeconds.coerceAtLeast(1) * 1000L
 
     val exoPlayer = remember(file.absolutePath) {
+        var playbackStarted = false
         ExoPlayer.Builder(context).build().apply {
             val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
             setMediaItem(mediaItem)
@@ -40,8 +46,9 @@ fun VideoPlayer(
 
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_ENDED) {
-                        onCompleted()
+                    if (playbackState == Player.STATE_READY && !playbackStarted) {
+                        playbackStarted = true
+                        onPlaybackStarted()
                     }
                 }
 
@@ -52,6 +59,12 @@ fun VideoPlayer(
 
             prepare()
         }
+    }
+
+    LaunchedEffect(file.absolutePath, configuredDurationMs) {
+        delay(configuredDurationMs)
+        exoPlayer.pause()
+        exoPlayer.stop()
     }
 
     DisposableEffect(exoPlayer) {
@@ -69,7 +82,7 @@ fun VideoPlayer(
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     player = exoPlayer
-                    useController = false  // No playback controls for signage
+                    useController = false
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                 }

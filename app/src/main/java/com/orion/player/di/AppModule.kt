@@ -3,7 +3,12 @@ package com.orion.player.di
 import android.content.Context
 import androidx.room.Room
 import com.orion.player.BuildConfig
+import com.orion.player.data.local.MIGRATION_1_2
+import com.orion.player.data.local.MIGRATION_2_3
+import com.orion.player.data.local.MIGRATION_3_4
 import com.orion.player.data.local.OrionDatabase
+import com.orion.player.data.local.HeartbeatQueueDao
+import com.orion.player.data.local.PlaylistCacheDao
 import com.orion.player.data.local.PopLogDao
 import com.orion.player.data.remote.OrionPlayerApi
 import dagger.Module
@@ -11,6 +16,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import com.orion.player.util.ApiLoggingInterceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -38,10 +44,13 @@ object AppModule {
         }
 
         return OkHttpClient.Builder()
+            .addInterceptor(ApiLoggingInterceptor())
             .addInterceptor(loggingInterceptor)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(90, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .writeTimeout(90, TimeUnit.SECONDS)
+            .callTimeout(120, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .build()
     }
 
@@ -70,11 +79,23 @@ object AppModule {
             context,
             OrionDatabase::class.java,
             "orion_player_db"
-        ).build()
+        )
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .build()
     }
 
     @Provides
     fun providePopLogDao(database: OrionDatabase): PopLogDao {
         return database.popLogDao()
+    }
+
+    @Provides
+    fun providePlaylistCacheDao(database: OrionDatabase): PlaylistCacheDao {
+        return database.playlistCacheDao()
+    }
+
+    @Provides
+    fun provideHeartbeatQueueDao(database: OrionDatabase): HeartbeatQueueDao {
+        return database.heartbeatQueueDao()
     }
 }

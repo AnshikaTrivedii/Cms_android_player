@@ -35,18 +35,29 @@ class SecurePrefs @Inject constructor(
         private const val KEY_ORGANIZATION_ID = "organization_id"
         private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_IS_PAIRED = "is_paired"
+        private const val KEY_PAIRING_SECRET = "pairing_secret"
+        private const val KEY_PAIRING_CODE = "pairing_code"
     }
 
     /**
      * Returns the persisted hardwareId, or generates and persists a new UUID on first call.
      */
     fun getOrCreateHardwareId(): String {
-        return prefs.getString(KEY_HARDWARE_ID, null) ?: run {
-            val newId = UUID.randomUUID().toString()
-            prefs.edit().putString(KEY_HARDWARE_ID, newId).apply()
-            newId
-        }
+        val existing = prefs.getString(KEY_HARDWARE_ID, null)?.trim()
+        if (!existing.isNullOrBlank()) return existing
+
+        val newId = UUID.randomUUID().toString()
+        prefs.edit().putString(KEY_HARDWARE_ID, newId).apply()
+        return newId
     }
+
+    var pairingSecret: String?
+        get() = prefs.getString(KEY_PAIRING_SECRET, null)
+        set(value) = prefs.edit().putString(KEY_PAIRING_SECRET, value).apply()
+
+    var pairingCode: String?
+        get() = prefs.getString(KEY_PAIRING_CODE, null)
+        set(value) = prefs.edit().putString(KEY_PAIRING_CODE, value).apply()
 
     var deviceToken: String?
         get() = prefs.getString(KEY_DEVICE_TOKEN, null)
@@ -88,6 +99,8 @@ class SecurePrefs @Inject constructor(
             .remove(KEY_DEVICE_TOKEN)
             .remove(KEY_ORGANIZATION_ID)
             .remove(KEY_DEVICE_NAME)
+            .remove(KEY_PAIRING_SECRET)
+            .remove(KEY_PAIRING_CODE)
             .putBoolean(KEY_IS_PAIRED, false)
             .apply()
     }

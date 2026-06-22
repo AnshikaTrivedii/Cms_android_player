@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.orion.player.data.local.SecurePrefs
 import com.orion.player.ui.pairing.PairingScreen
 import com.orion.player.ui.playback.PlaybackScreen
 
@@ -21,12 +20,14 @@ object Routes {
  * Start destination depends on whether the device is already paired.
  */
 @Composable
-fun OrionNavGraph() {
+fun OrionNavGraph(
+    startDestination: String = Routes.PAIRING
+) {
     val navController = rememberNavController()
 
     NavHost(
         navController = navController,
-        startDestination = Routes.PAIRING
+        startDestination = startDestination
     ) {
         composable(Routes.PAIRING) {
             PairingScreen(

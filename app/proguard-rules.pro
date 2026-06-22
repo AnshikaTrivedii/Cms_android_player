@@ -11,6 +11,9 @@
 # Gson
 -keep class com.orion.player.data.remote.** { *; }
 -keepclassmembers class com.orion.player.data.remote.** { *; }
+-keepclassmembers,allowobfuscation class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
 
 # OkHttp
 -dontwarn okhttp3.**
@@ -23,3 +26,11 @@
 # ExoPlayer / Media3
 -keep class androidx.media3.** { *; }
 -dontwarn androidx.media3.**
+
+# Hilt
+-keep class dagger.hilt.** { *; }
+-keep class javax.inject.** { *; }
+-keep class * extends dagger.hilt.android.internal.managers.ViewComponentManager$FragmentContextWrapper { *; }
+
+# Compose
+-dontwarn androidx.compose.**

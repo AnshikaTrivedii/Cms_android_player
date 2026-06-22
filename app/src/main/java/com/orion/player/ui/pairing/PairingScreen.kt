@@ -32,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.orion.player.BuildConfig
 
 /**
  * Pairing screen displayed on first launch.
@@ -56,9 +58,13 @@ fun PairingScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
-    // Navigate when paired
+    LaunchedEffect(uiState) {
+        if (uiState is PairingUiState.Paired) {
+            onPaired()
+        }
+    }
+
     if (uiState is PairingUiState.Paired) {
-        onPaired()
         return
     }
 
@@ -251,6 +257,14 @@ private fun ErrorState(
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 48.dp)
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "App version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            color = Color(0xFF6C63FF),
+            fontSize = 12.sp
         )
 
         Spacer(modifier = Modifier.height(24.dp))
