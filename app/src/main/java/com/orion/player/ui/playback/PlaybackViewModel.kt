@@ -14,6 +14,7 @@ import com.orion.player.data.sync.PlaybackSnapshot
 import com.orion.player.data.sync.PlayerEventStreamClient
 import com.orion.player.data.sync.RevisionCheckResult
 import com.orion.player.data.sync.SyncConfig
+import com.orion.player.data.sync.SyncDiagnostics
 import com.orion.player.data.sync.SyncOutcome
 import com.orion.player.data.ticker.TickerDisplayConfig
 import com.orion.player.util.DeviceHealthUtil
@@ -56,7 +57,7 @@ class PlaybackViewModel @Inject constructor(
     private var localFiles: Map<String, File> = emptyMap()
     private var playlistInfo: PlaylistInfo? = null
     private var campaignName: String? = null
-    private var currentTicker: TickerDisplayConfig? = null
+    private var currentTickers: List<TickerDisplayConfig> = emptyList()
 
     private var currentPopStartTime: Instant? = null
     private var currentPopAssetName: String? = null
@@ -87,12 +88,14 @@ class PlaybackViewModel @Inject constructor(
             playlistInfo = playlistInfo,
             campaignName = campaignName,
             currentIndex = _currentAssetIndex.value,
-            ticker = currentTicker
+            tickers = currentTickers
         )
     }
 
     private fun startPlayback() {
         viewModelScope.launch {
+            SyncDiagnostics.logStartupDevice(securePrefs)
+
             // Case 2: previously synced — start immediately from local cache
             val cached = contentSyncCoordinator.loadCachedSnapshot()
             if (cached != null && cached.assets.any { it.isPlayable(cached.localFiles) }) {
@@ -121,22 +124,24 @@ class PlaybackViewModel @Inject constructor(
                 }
                 is SyncOutcome.Failed -> {
                     if (currentSnapshot() == null) {
-                        _uiState.value = PlaybackUiState.WaitingForInitialDownload
+                        val reason = outcome.message.ifBlank { "Content download failed" }
+                        SyncDiagnostics.logWaitingScreen(reason, "startPlayback.Failed")
+                        _uiState.value = PlaybackUiState.WaitingForInitialDownload(reason)
                     }
                 }
                 is SyncOutcome.Updated -> {
-                    if (!outcome.fromCache || currentSnapshot() == null) {
-                        applySnapshot(outcome.snapshot, outcome.structureChanged)
-                    }
+                    applySnapshotIfPlayable(outcome.snapshot, outcome.structureChanged)
                     telemetryRepository.flushAll()
                 }
                 is SyncOutcome.Unchanged -> {
                     if (currentSnapshot() == null) {
                         val fallback = contentSyncCoordinator.loadCachedSnapshot()
-                        if (fallback != null) {
+                        if (fallback != null && fallback.assets.any { it.isPlayable(fallback.localFiles) }) {
                             applySnapshot(fallback, structureChanged = true)
                         } else {
-                            _uiState.value = PlaybackUiState.WaitingForInitialDownload
+                            val reason = "Sync unchanged and no playable local cache"
+                            SyncDiagnostics.logWaitingScreen(reason, "startPlayback.Unchanged")
+                            _uiState.value = PlaybackUiState.WaitingForInitialDownload(reason)
                         }
                     }
                 }
@@ -225,16 +230,33 @@ class PlaybackViewModel @Inject constructor(
                     _uiState.value = PlaybackUiState.NoContent
                 }
                 is SyncOutcome.Updated -> {
-                    applySnapshot(outcome.snapshot, outcome.structureChanged)
+                    applySnapshotIfPlayable(outcome.snapshot, outcome.structureChanged)
                     telemetryRepository.flushAll()
                 }
                 is SyncOutcome.Failed -> {
                     if (!outcome.keepPlaying && currentSnapshot() == null) {
-                        _uiState.value = PlaybackUiState.WaitingForInitialDownload
+                        val reason = outcome.message.ifBlank { "Content download failed" }
+                        SyncDiagnostics.logWaitingScreen(reason, "requestContentSync.Failed")
+                        _uiState.value = PlaybackUiState.WaitingForInitialDownload(reason)
                     }
                 }
                 is SyncOutcome.Unchanged, is SyncOutcome.Downloading -> Unit
             }
+        }
+    }
+
+    private fun applySnapshotIfPlayable(snapshot: PlaybackSnapshot, structureChanged: Boolean) {
+        if (snapshot.assets.any { it.isPlayable(snapshot.localFiles) }) {
+            applySnapshot(snapshot, structureChanged)
+        } else {
+            SyncDiagnostics.logPlayabilityCheck(snapshot.assets, snapshot.localFiles)
+            SyncDiagnostics.logWaitingScreen(
+                "Snapshot has no playable local files",
+                "applySnapshotIfPlayable"
+            )
+            _uiState.value = PlaybackUiState.WaitingForInitialDownload(
+                "Downloaded content is not playable yet"
+            )
         }
     }
 
@@ -244,7 +266,7 @@ class PlaybackViewModel @Inject constructor(
         localFiles = snapshot.localFiles
         playlistInfo = snapshot.playlistInfo
         campaignName = snapshot.campaignName
-        currentTicker = snapshot.ticker
+        currentTickers = snapshot.tickers
         _currentAssetIndex.value = snapshot.currentIndex
 
         val durationsChanged = previousAssets.isNotEmpty() &&
@@ -254,6 +276,12 @@ class PlaybackViewModel @Inject constructor(
             }
 
         emitCurrentAsset()
+        SyncDiagnostics.logPlaybackStart(
+            playlistName = playlistInfo?.name.orEmpty(),
+            assetName = assets.getOrNull(_currentAssetIndex.value)?.name.orEmpty(),
+            assetIndex = _currentAssetIndex.value,
+            total = assets.size
+        )
         if (structureChanged || durationsChanged || advanceJob == null || advanceJob?.isActive != true) {
             scheduleCurrentAsset()
         }
@@ -357,7 +385,7 @@ class PlaybackViewModel @Inject constructor(
                 currentIndex = index,
                 totalAssets = assets.size,
                 playlistName = playlistInfo?.name ?: "",
-                ticker = currentTicker
+                tickers = currentTickers
             )
         }
     }
@@ -451,7 +479,7 @@ class PlaybackViewModel @Inject constructor(
 sealed class PlaybackUiState {
     data object Loading : PlaybackUiState()
     data class Downloading(val current: Int, val total: Int) : PlaybackUiState()
-    data object WaitingForInitialDownload : PlaybackUiState()
+    data class WaitingForInitialDownload(val reason: String = "No local content available") : PlaybackUiState()
     data object NoContent : PlaybackUiState()
     data class Playing(
         val asset: AssetInfo,
@@ -459,7 +487,7 @@ sealed class PlaybackUiState {
         val currentIndex: Int,
         val totalAssets: Int,
         val playlistName: String,
-        val ticker: TickerDisplayConfig? = null
+        val tickers: List<TickerDisplayConfig> = emptyList()
     ) : PlaybackUiState()
     data class Error(val message: String) : PlaybackUiState()
 }

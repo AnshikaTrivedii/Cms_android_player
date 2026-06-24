@@ -4,15 +4,18 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 /**
- * Last synced ticker for offline display.
+ * Persisted tickers for offline display (all tickers returned by last sync).
  */
-@Entity(tableName = "cached_ticker")
+@Entity(tableName = "cached_tickers")
 data class CachedTickerEntity(
-    @PrimaryKey val id: Int = 1,
-    val tickerId: String?,
-    val text: String?,
-    val position: String?,
-    val speed: String?,
-    val backgroundColor: String?,
-    val textColor: String?
+    @PrimaryKey val tickerId: String,
+    val text: String,
+    val scope: String,
+    val position: String,
+    val speed: String,
+    val priority: String,
+    val height: String,
+    val backgroundColor: String,
+    val textColor: String,
+    val sortOrder: Int
 )

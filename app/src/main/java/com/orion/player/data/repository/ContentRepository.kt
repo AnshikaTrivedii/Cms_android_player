@@ -9,8 +9,10 @@ import com.orion.player.data.remote.AssetType.requiresDownload
 import com.orion.player.data.remote.OrionPlayerApi
 import com.orion.player.data.remote.SyncResponse
 import com.orion.player.data.remote.SyncRevisionResponse
+import com.orion.player.data.sync.SyncDiagnostics
 import com.orion.player.util.SessionGuard
 import com.orion.player.util.UrlSecurityUtil
+import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -23,6 +25,8 @@ import javax.inject.Singleton
 
 private const val SIGNAGE_USER_AGENT =
     "Mozilla/5.0 (Linux; Android 10; OrionSignage) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
+private const val TAG = "OrionSync"
 
 /**
  * Repository for content synchronization and asset caching.
@@ -64,20 +68,55 @@ class ContentRepository @Inject constructor(
      * Returns the local File path, or null on failure.
      */
     suspend fun downloadAsset(asset: AssetInfo): File? = withContext(Dispatchers.IO) {
-        if (!asset.requiresDownload()) return@withContext null
+        SyncDiagnostics.logDownloadStarted(asset)
+
+        if (!asset.requiresDownload()) {
+            SyncDiagnostics.logDownloadFailed(asset, "type ${asset.type} does not require download")
+            return@withContext null
+        }
 
         if (asset.normalizedType() == AssetType.URL) {
-            return@withContext downloadUrlSnapshot(asset)
+            val file = downloadUrlSnapshot(asset)
+            if (file != null) {
+                SyncDiagnostics.logDownloadSuccess(asset, file)
+            } else {
+                SyncDiagnostics.logDownloadFailed(
+                    asset,
+                    when {
+                        asset.url.isNullOrBlank() -> "URL asset missing url field"
+                        else -> "URL snapshot fetch failed"
+                    }
+                )
+            }
+            return@withContext file
         }
 
         val localFile = getLocalFile(asset)
 
         if (isCachedAssetValid(localFile, asset.fileSize)) {
+            SyncDiagnostics.logDownloadSuccess(asset, localFile)
             return@withContext localFile
         }
 
-        val downloadUrl = asset.downloadUrl ?: return@withContext null
-        return@withContext downloadToCache(localFile, downloadUrl, asset.fileSize)
+        val legacyFile = findLegacyCachedFile(asset)
+        if (legacyFile != null && isCachedAssetValid(legacyFile, asset.fileSize)) {
+            SyncDiagnostics.logDownloadSuccess(asset, legacyFile)
+            return@withContext legacyFile
+        }
+
+        val downloadUrl = asset.downloadUrl
+        if (downloadUrl.isNullOrBlank()) {
+            SyncDiagnostics.logDownloadFailed(asset, "missing downloadUrl")
+            return@withContext null
+        }
+
+        val downloaded = downloadToCache(localFile, downloadUrl, asset.fileSize)
+        if (downloaded != null) {
+            SyncDiagnostics.logDownloadSuccess(asset, downloaded)
+        } else {
+            SyncDiagnostics.logDownloadFailed(asset, "HTTP download failed for ${asset.name}")
+        }
+        downloaded
     }
 
     /**
@@ -96,7 +135,14 @@ class ContentRepository @Inject constructor(
 
     private fun isCachedAssetValid(localFile: File, expectedSize: Int): Boolean {
         if (!localFile.exists() || localFile.length() == 0L) return false
-        if (expectedSize > 0) return localFile.length() == expectedSize.toLong()
+        // Presigned URLs and HTML snapshots may not match CMS fileSize exactly.
+        if (expectedSize > 0 && localFile.length() != expectedSize.toLong()) {
+            Log.w(
+                TAG,
+                "Cached file size mismatch for ${localFile.name}: " +
+                    "expected=$expectedSize actual=${localFile.length()} — using cache anyway"
+            )
+        }
         return true
     }
 
@@ -110,7 +156,10 @@ class ContentRepository @Inject constructor(
                 .build()
             val response = okHttpClient.newCall(request).execute()
 
-            if (!response.isSuccessful) return null
+            if (!response.isSuccessful) {
+                Log.e(TAG, "HTTP ${response.code} downloading ${localFile.name} from $sourceUrl")
+                return null
+            }
 
             response.body?.byteStream()?.use { input ->
                 tempFile.outputStream().use { output ->
@@ -119,8 +168,11 @@ class ContentRepository @Inject constructor(
             }
 
             if (expectedSize > 0 && tempFile.length() != expectedSize.toLong()) {
-                tempFile.delete()
-                return null
+                Log.w(
+                    TAG,
+                    "Downloaded size mismatch for ${localFile.name}: " +
+                        "expected=$expectedSize actual=${tempFile.length()} — accepting file"
+                )
             }
 
             return if (tempFile.renameTo(localFile)) {
@@ -155,8 +207,8 @@ class ContentRepository @Inject constructor(
             if (file != null) {
                 result[asset.id] = file
             } else {
-                val existing = getLocalFile(asset)
-                if (isAssetCached(asset)) {
+                val existing = findCachedFileForAsset(asset)
+                if (existing != null) {
                     result[asset.id] = existing
                 }
             }
@@ -185,8 +237,33 @@ class ContentRepository @Inject constructor(
      * Checks if an asset is already cached locally.
      */
     fun isAssetCached(asset: AssetInfo): Boolean {
-        val file = getLocalFile(asset)
+        val file = findCachedFileForAsset(asset) ?: return false
         return isCachedAssetValid(file, asset.fileSize)
+    }
+
+    /**
+     * Resolves a cached file by canonical key or legacy key prefix (pre-v1.0.8 cache keys).
+     */
+    fun findCachedFileForAsset(asset: AssetInfo): File? {
+        val canonical = getLocalFile(asset)
+        if (canonical.exists() && canonical.length() > 0L) return canonical
+        return findLegacyCachedFile(asset)
+    }
+
+    fun countCacheFilesOnDisk(): Int =
+        cacheDir.listFiles()?.count { it.isFile && !it.name.endsWith(".tmp") } ?: 0
+
+    private fun findLegacyCachedFile(asset: AssetInfo): File? {
+        val extension = when (asset.normalizedType()) {
+            AssetType.URL, AssetType.HTML -> "html"
+            else -> asset.name.substringAfterLast('.', "bin")
+        }
+        val prefix = "${asset.id}_"
+        return cacheDir.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && !it.name.endsWith(".tmp") }
+            ?.filter { it.name.startsWith(prefix) && it.name.endsWith(".$extension") }
+            ?.firstOrNull { it.length() > 0L }
     }
 
     /**
@@ -207,14 +284,12 @@ class ContentRepository @Inject constructor(
     fun getCacheKey(asset: AssetInfo): String = asset.cacheKey()
 
     private fun AssetInfo.cacheKey(): String {
+        // Stable per asset — do not include presigned downloadUrl (rotates every sync).
         val fingerprint = listOf(
             id,
             name,
             type,
             mimeType,
-            durationSeconds.toString(),
-            position.toString(),
-            downloadUrl.orEmpty(),
             fileSize.toString(),
             url.orEmpty()
         ).joinToString("|")

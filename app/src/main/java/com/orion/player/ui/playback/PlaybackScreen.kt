@@ -35,10 +35,8 @@ import com.orion.player.data.remote.AssetType
 import com.orion.player.data.remote.AssetType.normalizedType
 import com.orion.player.ui.playback.player.HtmlPlayer
 import com.orion.player.ui.playback.player.ImagePlayer
-import com.orion.player.ui.playback.ticker.TickerOverlay
-import com.orion.player.ui.playback.ticker.toAlignment
-import com.orion.player.ui.playback.player.ImagePlayer
 import com.orion.player.ui.playback.player.VideoPlayer
+import com.orion.player.ui.playback.ticker.SignageLayeredPlayback
 
 /**
  * Main playback screen — renders assets fullscreen with crossfade transitions.
@@ -68,11 +66,12 @@ fun PlaybackScreen(
             is PlaybackUiState.Loading -> LoadingState()
             is PlaybackUiState.Downloading -> DownloadingState(state.current, state.total)
             is PlaybackUiState.WaitingForInitialDownload -> WaitingForInitialDownloadState(
+                reason = state.reason,
                 onRetry = { viewModel.retry() }
             )
             is PlaybackUiState.NoContent -> NoContentState()
             is PlaybackUiState.Playing -> {
-                Box(modifier = Modifier.fillMaxSize()) {
+                SignageLayeredPlayback(tickers = state.tickers) {
                     PlayingState(
                         state = state,
                         onAssetFailed = { viewModel.onAssetFailed(it) },
@@ -80,12 +79,6 @@ fun PlaybackScreen(
                         onUrlLoadSuccess = { viewModel.onUrlLoadSuccess(it) },
                         onUrlLoadFailed = { viewModel.onUrlLoadFailed(it) }
                     )
-                    state.ticker?.let { ticker ->
-                        TickerOverlay(
-                            config = ticker,
-                            modifier = Modifier.align(ticker.position.toAlignment())
-                        )
-                    }
                 }
             }
             is PlaybackUiState.Error -> ErrorState(
@@ -141,7 +134,7 @@ private fun DownloadingState(current: Int, total: Int) {
 }
 
 @Composable
-private fun WaitingForInitialDownloadState(onRetry: () -> Unit) {
+private fun WaitingForInitialDownloadState(reason: String, onRetry: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.padding(48.dp)
@@ -161,6 +154,14 @@ private fun WaitingForInitialDownloadState(onRetry: () -> Unit) {
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = reason,
+            color = Color(0xFFFFB74D),
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 20.sp
+        )
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = "Connect to the internet and assign a playlist\nin the Orion CMS dashboard.",
             color = Color(0xFFB0B0C0),

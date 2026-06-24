@@ -23,4 +23,27 @@ object AssetType {
     /** VIDEO/HTML/URL start PoP when content is actually ready, not at slot assignment. */
     fun AssetInfo.deferPopStartUntilReady(): Boolean =
         normalizedType() in setOf(VIDEO, HTML, URL)
+
+    /**
+     * Whether asset content changed in ways that require re-download.
+     * Presigned [AssetInfo.downloadUrl] values are excluded — they rotate every sync.
+     */
+    fun AssetInfo.hasContentChangedFrom(other: AssetInfo): Boolean =
+        name != other.name ||
+            normalizedType() != other.normalizedType() ||
+            mimeType != other.mimeType ||
+            durationSeconds != other.durationSeconds ||
+            position != other.position ||
+            fileSize != other.fileSize ||
+            url != other.url
+
+    fun List<AssetInfo>.hasSyncContentChangedFrom(previous: List<AssetInfo>): Boolean {
+        if (size != previous.size) return true
+        if (map { it.id }.toSet() != previous.map { it.id }.toSet()) return true
+        val previousById = previous.associateBy { it.id }
+        return any { asset ->
+            val prior = previousById[asset.id] ?: return@any true
+            asset.hasContentChangedFrom(prior)
+        }
+    }
 }

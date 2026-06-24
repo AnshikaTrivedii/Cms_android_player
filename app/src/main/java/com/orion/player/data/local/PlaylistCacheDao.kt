@@ -31,13 +31,21 @@ interface PlaylistCacheDao {
     suspend fun getCachedAssetCount(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertTicker(ticker: CachedTickerEntity)
+    suspend fun upsertTickers(tickers: List<CachedTickerEntity>)
 
-    @Query("SELECT * FROM cached_ticker WHERE id = 1 LIMIT 1")
-    suspend fun getTicker(): CachedTickerEntity?
+    @Query("SELECT * FROM cached_tickers ORDER BY sortOrder ASC")
+    suspend fun getTickers(): List<CachedTickerEntity>
 
-    @Query("DELETE FROM cached_ticker")
-    suspend fun clearTicker()
+    @Query("DELETE FROM cached_tickers")
+    suspend fun clearTickers()
+
+    @Transaction
+    suspend fun replaceTickers(tickers: List<CachedTickerEntity>) {
+        clearTickers()
+        if (tickers.isNotEmpty()) {
+            upsertTickers(tickers)
+        }
+    }
 
     @Transaction
     suspend fun replaceAll(

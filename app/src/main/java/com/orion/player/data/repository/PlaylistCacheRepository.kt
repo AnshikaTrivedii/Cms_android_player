@@ -8,7 +8,10 @@ import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.PlaylistInfo
 import com.orion.player.data.sync.PlaybackSnapshot
 import com.orion.player.data.ticker.TickerDisplayConfig
+import com.orion.player.data.ticker.TickerHeight
 import com.orion.player.data.ticker.TickerPosition
+import com.orion.player.data.ticker.TickerPriority
+import com.orion.player.data.ticker.TickerScope
 import com.orion.player.data.ticker.TickerSpeed
 import java.io.File
 import javax.inject.Inject
@@ -69,41 +72,42 @@ class PlaylistCacheRepository @Inject constructor(
                 )
             }
         )
-        saveTicker(snapshot.ticker)
+        saveTickers(snapshot.tickers)
     }
 
-    private suspend fun saveTicker(ticker: TickerDisplayConfig?) {
-        if (ticker == null) {
-            playlistCacheDao.clearTicker()
-            return
-        }
+    private suspend fun saveTickers(tickers: List<TickerDisplayConfig>) {
+        playlistCacheDao.replaceTickers(
+            tickers.mapIndexed { index, ticker ->
+                CachedTickerEntity(
+                    tickerId = ticker.id,
+                    text = ticker.text,
+                    scope = ticker.scope.name,
+                    position = ticker.position.name,
+                    speed = ticker.speed.name,
+                    priority = ticker.priority.name,
+                    height = ticker.height.name,
+                    backgroundColor = ticker.backgroundColorHex,
+                    textColor = ticker.textColorHex,
+                    sortOrder = index
+                )
+            }
+        )
+    }
 
-        playlistCacheDao.upsertTicker(
-            CachedTickerEntity(
-                tickerId = ticker.id,
-                text = ticker.text,
-                position = ticker.position.name,
-                speed = ticker.speed.name,
-                backgroundColor = ticker.backgroundColorHex,
-                textColor = ticker.textColorHex
+    private suspend fun loadTickers(): List<TickerDisplayConfig> {
+        return playlistCacheDao.getTickers().map { cached ->
+            TickerDisplayConfig(
+                id = cached.tickerId,
+                text = cached.text,
+                scope = TickerScope.from(cached.scope),
+                position = TickerPosition.from(cached.position),
+                speed = TickerSpeed.from(cached.speed),
+                priority = TickerPriority.from(cached.priority),
+                height = TickerHeight.from(cached.height),
+                backgroundColorHex = cached.backgroundColor,
+                textColorHex = cached.textColor
             )
-        )
-    }
-
-    private suspend fun loadTicker(): TickerDisplayConfig? {
-        val cached = playlistCacheDao.getTicker() ?: return null
-        val text = cached.text ?: return null
-        val tickerId = cached.tickerId ?: return null
-        if (text.isBlank()) return null
-
-        return TickerDisplayConfig(
-            id = tickerId,
-            text = text,
-            position = TickerPosition.from(cached.position.orEmpty()),
-            speed = TickerSpeed.from(cached.speed.orEmpty()),
-            backgroundColorHex = cached.backgroundColor.orEmpty().ifBlank { "#000000" },
-            textColorHex = cached.textColor.orEmpty().ifBlank { "#FFFFFF" }
-        )
+        }
     }
 
     suspend fun loadSnapshot(): PlaybackSnapshot? {
@@ -114,9 +118,10 @@ class PlaylistCacheRepository @Inject constructor(
         val assets = cachedAssets.map { it.toAssetInfo() }
         val localFiles = buildMap {
             for (entity in cachedAssets) {
-                val path = entity.localFilePath ?: continue
-                val file = File(path)
-                if (file.exists()) {
+                val asset = entity.toAssetInfo()
+                val storedPath = entity.localFilePath?.let { File(it) }?.takeIf { it.exists() }
+                val file = storedPath ?: contentRepository.findCachedFileForAsset(asset)
+                if (file != null && file.exists() && file.length() > 0L) {
                     put(entity.assetId, file)
                 }
             }
@@ -133,9 +138,13 @@ class PlaylistCacheRepository @Inject constructor(
             ),
             campaignName = cachedPlaylist.campaignName,
             currentIndex = 0,
-            ticker = loadTicker()
+            tickers = loadTickers()
         )
     }
+
+    suspend fun getCachedAssetRowCount(): Int = playlistCacheDao.getAssets().size
+
+    suspend fun hasRoomPlaylist(): Boolean = playlistCacheDao.getPlaylist() != null
 
     suspend fun getLastSyncTime(): Long? =
         playlistCacheDao.getPlaylist()?.lastSyncTime

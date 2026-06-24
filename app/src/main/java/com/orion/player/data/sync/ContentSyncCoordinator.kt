@@ -2,14 +2,18 @@ package com.orion.player.data.sync
 
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.remote.AssetInfo
+import com.orion.player.data.remote.AssetType.hasSyncContentChangedFrom
 import com.orion.player.data.remote.AssetType.isPlayable
 import com.orion.player.data.remote.PlaylistInfo
 import com.orion.player.data.remote.SyncResponse
 import com.orion.player.data.repository.ContentRepository
 import com.orion.player.data.repository.PlaylistCacheRepository
 import com.orion.player.data.ticker.TickerDisplayConfig
-import com.orion.player.data.ticker.resolveActiveTicker
+import com.orion.player.data.sync.SyncDiagnostics
+import com.orion.player.data.ticker.TickerLogger
+import com.orion.player.data.ticker.resolveActiveTickers
 import retrofit2.HttpException
+import android.util.Log
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,7 +24,7 @@ data class PlaybackSnapshot(
     val playlistInfo: PlaylistInfo?,
     val campaignName: String?,
     val currentIndex: Int,
-    val ticker: TickerDisplayConfig? = null
+    val tickers: List<TickerDisplayConfig> = emptyList()
 )
 
 sealed class SyncOutcome {
@@ -52,6 +56,10 @@ class ContentSyncCoordinator @Inject constructor(
     private val playlistCacheRepository: PlaylistCacheRepository,
     private val securePrefs: SecurePrefs
 ) {
+    companion object {
+        private const val TAG = "OrionSync"
+    }
+
     private var lastKnownRevision: String? = null
     private var lastSyncAttemptMs: Long = 0L
     private var syncInProgress: Boolean = false
@@ -62,8 +70,16 @@ class ContentSyncCoordinator @Inject constructor(
     val useAggressiveFullSyncFallback: Boolean
         get() = revisionEndpointAvailable == false
 
-    suspend fun loadCachedSnapshot(): PlaybackSnapshot? =
-        playlistCacheRepository.loadSnapshot()
+    suspend fun loadCachedSnapshot(): PlaybackSnapshot? {
+        val snapshot = playlistCacheRepository.loadSnapshot()
+        SyncDiagnostics.logCacheLoad(
+            snapshot = snapshot,
+            roomAssetCount = playlistCacheRepository.getCachedAssetRowCount(),
+            roomPlaylistPresent = playlistCacheRepository.hasRoomPlaylist(),
+            diskFileCount = contentRepository.countCacheFilesOnDisk()
+        )
+        return snapshot
+    }
 
     suspend fun hasCachedContent(): Boolean =
         playlistCacheRepository.hasCachedContent()
@@ -134,17 +150,25 @@ class ContentSyncCoordinator @Inject constructor(
             val syncResponse = contentRepository.syncPlaylist()
                 ?: return SyncOutcome.Unpaired
 
+            SyncDiagnostics.logSyncResponse(securePrefs, syncResponse)
             updateRevisionFromSync(syncResponse)
 
             if (syncResponse.playlist == null || syncResponse.assets.isEmpty()) {
+                SyncDiagnostics.logSyncNoContent()
                 return SyncOutcome.NoContent
             }
 
             val newAssets = syncResponse.assets.sortedBy { it.position }
-            val resolvedTicker = syncResponse.tickers.resolveActiveTicker()
+            TickerLogger.received(syncResponse.tickers)
+            val resolvedTickers = syncResponse.tickers.resolveActiveTickers()
+            if (resolvedTickers.isEmpty()) {
+                TickerLogger.cleared()
+            } else {
+                TickerLogger.resolved(resolvedTickers)
+            }
             val playlistChanged = syncResponse.playlist != current?.playlistInfo
-            val assetsChanged = newAssets != current?.assets
-            val tickerChanged = resolvedTicker != current?.ticker
+            val assetsChanged = newAssets.hasSyncContentChangedFrom(current?.assets.orEmpty())
+            val tickerChanged = resolvedTickers != current?.tickers
 
             if (!force && current != null && !assetsChanged && !playlistChanged && !tickerChanged) {
                 return SyncOutcome.Unchanged
@@ -152,7 +176,7 @@ class ContentSyncCoordinator @Inject constructor(
 
             if (!assetsChanged && !playlistChanged && current != null) {
                 val snapshot = current.copy(
-                    ticker = resolvedTicker,
+                    tickers = resolvedTickers,
                     campaignName = syncResponse.campaignName ?: current.campaignName
                 )
                 playlistCacheRepository.saveSnapshot(
@@ -167,18 +191,23 @@ class ContentSyncCoordinator @Inject constructor(
                 onDownloadProgress?.invoke(completed, total)
             }
 
-            contentRepository.cleanupStaleCache(
-                newAssets.map { contentRepository.getCacheKey(it) }.toSet()
-            )
-
             val mergedFiles = buildLocalFileMap(newAssets, newFiles, current)
+            SyncDiagnostics.logPlayabilityCheck(newAssets, mergedFiles)
 
             if (!newAssets.any { it.isPlayable(mergedFiles) }) {
+                val failedNames = newAssets
+                    .filterNot { it.isPlayable(mergedFiles) }
+                    .joinToString { it.name }
+                Log.e(TAG, "No playable assets after sync. Failed: $failedNames")
                 return fallbackOrFail(
                     current = current,
                     message = "Failed to download content"
                 )
             }
+
+            contentRepository.cleanupStaleCache(
+                newAssets.map { contentRepository.getCacheKey(it) }.toSet()
+            )
 
             val structureChanged = current == null ||
                 newAssets.map { it.id } != current.assets.map { it.id } ||
@@ -196,7 +225,7 @@ class ContentSyncCoordinator @Inject constructor(
                 playlistInfo = syncResponse.playlist,
                 campaignName = syncResponse.campaignName,
                 currentIndex = nextIndex,
-                ticker = resolvedTicker
+                tickers = resolvedTickers
             )
 
             playlistCacheRepository.saveSnapshot(
@@ -204,11 +233,16 @@ class ContentSyncCoordinator @Inject constructor(
                 contentRevision = lastKnownRevision
             )
 
+            SyncDiagnostics.logOutcome("Updated", "playable=${mergedFiles.size} assets")
             SyncOutcome.Updated(snapshot = snapshot, structureChanged = structureChanged)
         } catch (e: HttpException) {
             if (e.code() == 401) SyncOutcome.Unpaired
-            else fallbackOrFail(current = current, message = e.message ?: "Sync failed")
+            else {
+                SyncDiagnostics.logSyncFailed(e.message ?: "HTTP ${e.code()}", e)
+                fallbackOrFail(current = current, message = e.message ?: "Sync failed")
+            }
         } catch (e: Exception) {
+            SyncDiagnostics.logSyncFailed(e.message ?: "Sync failed", e)
             fallbackOrFail(current = current, message = e.message ?: "Sync failed")
         } finally {
             syncInProgress = false
@@ -243,10 +277,10 @@ class ContentSyncCoordinator @Inject constructor(
         for (asset in assets) {
             val file = downloaded[asset.id]
                 ?: current?.localFiles?.get(asset.id)
-                ?: contentRepository.getLocalFile(asset).takeIf {
-                    contentRepository.isAssetCached(asset)
+                ?: contentRepository.findCachedFileForAsset(asset)?.takeIf {
+                    it.exists() && it.length() > 0L
                 }
-            if (file != null && file.exists()) {
+            if (file != null && file.exists() && file.length() > 0L) {
                 put(asset.id, file)
             }
         }

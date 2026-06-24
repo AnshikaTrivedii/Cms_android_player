@@ -68,3 +68,35 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         )
     }
 }
+
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("DROP TABLE IF EXISTS cached_ticker")
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS cached_tickers (
+                tickerId TEXT PRIMARY KEY NOT NULL,
+                text TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                position TEXT NOT NULL,
+                speed TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                backgroundColor TEXT NOT NULL,
+                textColor TEXT NOT NULL,
+                sortOrder INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+    }
+}
+
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            ALTER TABLE cached_tickers
+            ADD COLUMN height TEXT NOT NULL DEFAULT 'MEDIUM'
+            """.trimIndent()
+        )
+    }
+}

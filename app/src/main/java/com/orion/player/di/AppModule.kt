@@ -6,6 +6,8 @@ import com.orion.player.BuildConfig
 import com.orion.player.data.local.MIGRATION_1_2
 import com.orion.player.data.local.MIGRATION_2_3
 import com.orion.player.data.local.MIGRATION_3_4
+import com.orion.player.data.local.MIGRATION_4_5
+import com.orion.player.data.local.MIGRATION_5_6
 import com.orion.player.data.local.OrionDatabase
 import com.orion.player.data.local.HeartbeatQueueDao
 import com.orion.player.data.local.PlaylistCacheDao
@@ -80,7 +82,7 @@ object AppModule {
             OrionDatabase::class.java,
             "orion_player_db"
         )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .build()
     }
 

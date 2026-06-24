@@ -2,17 +2,32 @@ package com.orion.player.data.ticker
 
 /**
  * Ticker configuration from GET /player/sync.
+ * Device targeting is resolved by the backend — the player renders all tickers returned.
  */
 data class TickerInfo(
     val id: String,
     val text: String,
-    val position: String,
-    val speed: String,
-    val priority: String,
-    val backgroundColor: String,
-    val textColor: String,
+    val scope: String = "ALL_DEVICES",
+    val position: String = "BOTTOM",
+    val height: String = "MEDIUM",
+    val speed: String = "NORMAL",
+    val priority: String = "NORMAL",
+    val backgroundColor: String = "#000000",
+    val textColor: String = "#FFFFFF",
     val isActive: Boolean = true
 )
+
+enum class TickerScope {
+    ALL_DEVICES,
+    SELECTED_DEVICES;
+
+    companion object {
+        fun from(raw: String): TickerScope = when (raw.uppercase()) {
+            "SELECTED_DEVICES" -> SELECTED_DEVICES
+            else -> ALL_DEVICES
+        }
+    }
+}
 
 enum class TickerPosition {
     TOP,
@@ -22,6 +37,20 @@ enum class TickerPosition {
         fun from(raw: String): TickerPosition = when (raw.uppercase()) {
             "TOP" -> TOP
             else -> BOTTOM
+        }
+    }
+}
+
+enum class TickerHeight {
+    SMALL,
+    MEDIUM,
+    LARGE;
+
+    companion object {
+        fun from(raw: String): TickerHeight = when (raw.uppercase()) {
+            "SMALL" -> SMALL
+            "LARGE" -> LARGE
+            else -> MEDIUM
         }
     }
 }
@@ -64,23 +93,45 @@ enum class TickerPriority {
 data class TickerDisplayConfig(
     val id: String,
     val text: String,
+    val scope: TickerScope,
     val position: TickerPosition,
+    val height: TickerHeight,
     val speed: TickerSpeed,
+    val priority: TickerPriority,
     val backgroundColorHex: String,
     val textColorHex: String
-)
+) {
+    val isEmergency: Boolean
+        get() = priority == TickerPriority.URGENT
+}
 
-fun List<TickerInfo>.resolveActiveTicker(): TickerDisplayConfig? =
+/**
+ * Returns all active tickers from sync, sorted by priority (URGENT → NORMAL → LOW).
+ * No local device filtering — backend returns only tickers for this device.
+ */
+fun List<TickerInfo>.resolveActiveTickers(): List<TickerDisplayConfig> =
     asSequence()
         .filter { it.isActive && it.text.isNotBlank() }
-        .maxByOrNull { TickerPriority.from(it.priority).rank }
-        ?.toDisplayConfig()
+        .sortedByDescending { TickerPriority.from(it.priority).rank }
+        .map { it.toDisplayConfig() }
+        .toList()
+
+/**
+ * Emergency override: when URGENT tickers exist at a position, only they rotate.
+ */
+fun List<TickerDisplayConfig>.rotationQueue(): List<TickerDisplayConfig> {
+    val urgent = filter { it.priority == TickerPriority.URGENT }
+    return if (urgent.isNotEmpty()) urgent else this
+}
 
 fun TickerInfo.toDisplayConfig(): TickerDisplayConfig = TickerDisplayConfig(
     id = id,
     text = text.trim(),
+    scope = TickerScope.from(scope),
     position = TickerPosition.from(position),
+    height = TickerHeight.from(height),
     speed = TickerSpeed.from(speed),
-    backgroundColorHex = backgroundColor,
-    textColorHex = textColor
+    priority = TickerPriority.from(priority),
+    backgroundColorHex = backgroundColor.ifBlank { "#000000" },
+    textColorHex = textColor.ifBlank { "#FFFFFF" }
 )

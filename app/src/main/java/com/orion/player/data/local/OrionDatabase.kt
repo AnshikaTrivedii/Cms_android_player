@@ -17,7 +17,7 @@ import androidx.room.RoomDatabase
         CachedTickerEntity::class,
         QueuedHeartbeatEntity::class
     ],
-    version = 4,
+    version = 6,
     exportSchema = false
 )
 abstract class OrionDatabase : RoomDatabase() {
