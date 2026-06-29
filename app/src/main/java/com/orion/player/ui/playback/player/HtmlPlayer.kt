@@ -24,14 +24,15 @@ import androidx.compose.ui.viewinterop.AndroidView
 @Composable
 fun HtmlPlayer(
     url: String,
+    playbackSessionKey: String = "",
     onLoadSuccess: () -> Unit = {},
     onLoadFailed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var loadReported by remember(url) { mutableStateOf(false) }
+    var loadReported by remember(url, playbackSessionKey) { mutableStateOf(false) }
 
-    val webView = remember(url) {
+    val webView = remember(url, playbackSessionKey) {
         WebView(context).apply {
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, finishedUrl: String?) {

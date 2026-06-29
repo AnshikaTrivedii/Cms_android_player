@@ -11,7 +11,6 @@ import java.time.Instant
 data class PopLogRecord(
     val deviceName: String,
     val playlistName: String,
-    val campaignName: String,
     val assetName: String,
     val startTime: Instant,
     val endTime: Instant,
@@ -21,7 +20,6 @@ data class PopLogRecord(
     fun toEntity(): PopLogEntity = PopLogEntity(
         deviceName = deviceName,
         playlistName = playlistName,
-        campaignName = campaignName,
         assetName = assetName,
         startTime = startTime.toString(),
         endTime = endTime.toString(),
@@ -32,7 +30,6 @@ data class PopLogRecord(
     fun toApiEntry(): PopLogEntry = PopLogEntry(
         assetName = assetName,
         playlistName = playlistName,
-        campaignName = campaignName,
         startTime = startTime.toString(),
         endTime = endTime.toString(),
         durationSeconds = durationSeconds,
@@ -43,20 +40,18 @@ data class PopLogRecord(
         fun verified(
             deviceName: String,
             playlistName: String,
-            campaignName: String,
             assetName: String,
             startTime: Instant,
-            endTime: Instant
+            endTime: Instant,
+            durationSeconds: Int = Duration.between(startTime, endTime).seconds.toInt().coerceAtLeast(0)
         ): PopLogRecord {
-            val duration = Duration.between(startTime, endTime).seconds.toInt().coerceAtLeast(0)
             return PopLogRecord(
                 deviceName = deviceName,
                 playlistName = playlistName,
-                campaignName = campaignName,
                 assetName = assetName,
                 startTime = startTime,
                 endTime = endTime,
-                durationSeconds = duration,
+                durationSeconds = durationSeconds.coerceAtLeast(0),
                 status = "VERIFIED"
             )
         }
@@ -64,14 +59,12 @@ data class PopLogRecord(
         fun failed(
             deviceName: String,
             playlistName: String,
-            campaignName: String,
             assetName: String,
             startTime: Instant,
             endTime: Instant = startTime
         ): PopLogRecord = PopLogRecord(
             deviceName = deviceName,
             playlistName = playlistName,
-            campaignName = campaignName,
             assetName = assetName,
             startTime = startTime,
             endTime = endTime,

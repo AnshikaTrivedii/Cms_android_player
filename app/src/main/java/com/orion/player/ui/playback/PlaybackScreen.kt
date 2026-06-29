@@ -23,6 +23,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,28 +36,26 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.orion.player.data.remote.AssetType
-import com.orion.player.data.remote.AssetType.normalizedType
-import com.orion.player.ui.playback.player.HtmlPlayer
-import com.orion.player.ui.playback.player.ImagePlayer
-import com.orion.player.ui.playback.player.VideoPlayer
 import com.orion.player.ui.playback.ticker.SignageLayeredPlayback
 
-/**
- * Main playback screen — renders assets fullscreen with crossfade transitions.
- */
 @Composable
 fun PlaybackScreen(
     onUnpaired: () -> Unit,
+    onOpenCacheDebug: () -> Unit = {},
     viewModel: PlaybackViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val isUnpaired by viewModel.isUnpaired.collectAsState()
+    var debugTapCount by remember { mutableIntStateOf(0) }
 
-    // Handle unpair (401 response)
     LaunchedEffect(isUnpaired) {
-        if (isUnpaired) {
-            onUnpaired()
+        if (isUnpaired) onUnpaired()
+    }
+
+    LaunchedEffect(debugTapCount) {
+        if (debugTapCount >= 5) {
+            debugTapCount = 0
+            onOpenCacheDebug()
         }
     }
 
@@ -62,6 +65,18 @@ fun PlaybackScreen(
             .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
+        // Hidden debug entry: tap top-left corner 5 times to open Cache Debug screen.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .size(72.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    debugTapCount++
+                }
+        )
         when (val state = uiState) {
             is PlaybackUiState.Loading -> LoadingState()
             is PlaybackUiState.Downloading -> DownloadingState(state.current, state.total)
@@ -70,15 +85,24 @@ fun PlaybackScreen(
                 onRetry = { viewModel.retry() }
             )
             is PlaybackUiState.NoContent -> NoContentState()
-            is PlaybackUiState.Playing -> {
+            is PlaybackUiState.PlayingFullScreen -> {
                 SignageLayeredPlayback(tickers = state.tickers) {
-                    PlayingState(
-                        state = state,
-                        onAssetFailed = { viewModel.onAssetFailed(it) },
-                        onPlaybackStarted = { viewModel.onPlaybackStarted(it) },
-                        onUrlLoadSuccess = { viewModel.onUrlLoadSuccess(it) },
-                        onUrlLoadFailed = { viewModel.onUrlLoadFailed(it) }
-                    )
+                    Crossfade(
+                        targetState = state.currentIndex,
+                        animationSpec = tween(durationMillis = 800),
+                        label = "assetTransition"
+                    ) { _ ->
+                        AssetPlayback(
+                            asset = state.asset,
+                            localFile = state.localFile,
+                            playbackSessionId = state.playbackSessionId,
+                            modifier = Modifier.fillMaxSize(),
+                            onAssetFailed = { viewModel.onAssetFailed(it) },
+                            onPlaybackStarted = { viewModel.onPlaybackStarted(it) },
+                            onUrlLoadSuccess = { viewModel.onUrlLoadSuccess(it) },
+                            onUrlLoadFailed = { viewModel.onUrlLoadFailed(it) }
+                        )
+                    }
                 }
             }
             is PlaybackUiState.Error -> ErrorState(
@@ -91,45 +115,29 @@ fun PlaybackScreen(
 
 @Composable
 private fun LoadingState() {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         CircularProgressIndicator(
             color = Color(0xFF6C63FF),
             strokeWidth = 3.dp,
             modifier = Modifier.size(48.dp)
         )
         Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "Loading content...",
-            color = Color(0xFFB0B0C0),
-            fontSize = 16.sp
-        )
+        Text(text = "Loading content...", color = Color(0xFFB0B0C0), fontSize = 16.sp)
     }
 }
 
 @Composable
 private fun DownloadingState(current: Int, total: Int) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         CircularProgressIndicator(
             color = Color(0xFF6C63FF),
             strokeWidth = 3.dp,
             modifier = Modifier.size(48.dp)
         )
         Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "Downloading assets...",
-            color = Color.White,
-            fontSize = 16.sp
-        )
+        Text(text = "Downloading assets...", color = Color.White, fontSize = 16.sp)
         Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "$current / $total",
-            color = Color(0xFFB0B0C0),
-            fontSize = 14.sp
-        )
+        Text(text = "$current / $total", color = Color(0xFFB0B0C0), fontSize = 14.sp)
     }
 }
 
@@ -163,7 +171,7 @@ private fun WaitingForInitialDownloadState(reason: String, onRetry: () -> Unit) 
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Connect to the internet and assign a playlist\nin the Orion CMS dashboard.",
+            text = "Connect to the internet and assign a playlist or layout\nin the Orion CMS dashboard.",
             color = Color(0xFFB0B0C0),
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
@@ -201,7 +209,7 @@ private fun NoContentState() {
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "Please assign a playlist to this display\nin the Orion CMS dashboard.",
+            text = "Please assign a playlist or layout to this display\nin the Orion CMS dashboard.",
             color = Color(0xFFB0B0C0),
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
@@ -211,131 +219,9 @@ private fun NoContentState() {
 }
 
 @Composable
-private fun PlayingState(
-    state: PlaybackUiState.Playing,
-    onAssetFailed: (String) -> Unit,
-    onPlaybackStarted: (String) -> Unit,
-    onUrlLoadSuccess: (String) -> Unit,
-    onUrlLoadFailed: (String) -> Unit
-) {
-    Crossfade(
-        targetState = state.currentIndex,
-        animationSpec = tween(durationMillis = 800),
-        label = "assetTransition"
-    ) { _ ->
-        val asset = state.asset
-        val localFile = state.localFile
-
-        when (asset.normalizedType()) {
-            AssetType.IMAGE -> {
-                if (localFile == null) {
-                    UnavailableAssetPlaceholder()
-                    return@Crossfade
-                }
-                ImagePlayer(file = localFile, modifier = Modifier.fillMaxSize())
-            }
-            AssetType.VIDEO -> {
-                if (localFile == null) {
-                    UnavailableAssetPlaceholder()
-                    return@Crossfade
-                }
-                VideoPlayer(
-                    file = localFile,
-                    configuredDurationSeconds = asset.durationSeconds,
-                    onPlaybackStarted = { onPlaybackStarted(asset.name) },
-                    onError = { onAssetFailed(asset.name) },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            AssetType.HTML, AssetType.URL -> {
-                if (localFile == null || !localFile.exists()) {
-                    UnavailableAssetPlaceholder()
-                    return@Crossfade
-                }
-                HtmlPlayer(
-                    url = localFile.toURI().toString(),
-                    onLoadSuccess = {
-                        if (asset.normalizedType() == AssetType.URL) {
-                            onUrlLoadSuccess(asset.name)
-                        } else {
-                            onPlaybackStarted(asset.name)
-                        }
-                    },
-                    onLoadFailed = {
-                        if (asset.normalizedType() == AssetType.URL) {
-                            onUrlLoadFailed(asset.name)
-                        } else {
-                            onAssetFailed(asset.name)
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            AssetType.DOCUMENT -> {
-                UnsupportedAssetPlaceholder(
-                    label = "Document playback not supported",
-                    subtitle = asset.name
-                )
-            }
-            else -> {
-                UnsupportedAssetPlaceholder(
-                    label = "Unsupported: ${asset.type}",
-                    subtitle = asset.name
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun UnavailableAssetPlaceholder() {
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Default.CloudOff,
-                contentDescription = "Asset unavailable",
-                tint = Color(0xFF6C63FF),
-                modifier = Modifier.size(48.dp)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Asset unavailable",
-                color = Color(0xFFB0B0C0),
-                fontSize = 14.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun UnsupportedAssetPlaceholder(label: String, subtitle: String) {
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(text = label, color = Color(0xFFB0B0C0), fontSize = 14.sp)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(text = subtitle, color = Color(0xFF6C63FF), fontSize = 12.sp)
-        }
-    }
-}
-
-@Composable
-private fun ErrorState(
-    message: String,
-    onRetry: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = "⚠️",
-            fontSize = 48.sp
-        )
+private fun ErrorState(message: String, onRetry: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = "⚠️", fontSize = 48.sp)
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = "Playback Error",
@@ -354,9 +240,7 @@ private fun ErrorState(
         Spacer(modifier = Modifier.height(24.dp))
         Button(
             onClick = onRetry,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF6C63FF)
-            )
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6C63FF))
         ) {
             Icon(Icons.Default.Refresh, contentDescription = "Retry")
             Text("  Retry", modifier = Modifier.padding(start = 4.dp))

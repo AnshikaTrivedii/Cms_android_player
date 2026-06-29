@@ -2,7 +2,10 @@ package com.orion.player.ui.playback
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.orion.player.data.cache.CacheDownloadLogger
+import com.orion.player.data.analytics.PlaybackSession
 import com.orion.player.data.analytics.PopLogRecord
+import com.orion.player.data.analytics.PopSessionLogger
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType.deferPopStartUntilReady
@@ -10,6 +13,7 @@ import com.orion.player.data.remote.AssetType.isPlayable
 import com.orion.player.data.remote.PlaylistInfo
 import com.orion.player.data.repository.TelemetryRepository
 import com.orion.player.data.sync.ContentSyncCoordinator
+import com.orion.player.data.sync.PlaybackMode
 import com.orion.player.data.sync.PlaybackSnapshot
 import com.orion.player.data.sync.PlayerEventStreamClient
 import com.orion.player.data.sync.RevisionCheckResult
@@ -30,13 +34,6 @@ import java.io.File
 import java.time.Instant
 import javax.inject.Inject
 
-/**
- * ViewModel managing the playback lifecycle:
- * - Near-real-time content sync (SSE + revision polling + fallback)
- * - Advance through assets on a timer
- * - Send heartbeats every 60s
- * - Queue & flush PoP logs every 5 min
- */
 @HiltViewModel
 class PlaybackViewModel @Inject constructor(
     private val contentSyncCoordinator: ContentSyncCoordinator,
@@ -53,15 +50,15 @@ class PlaybackViewModel @Inject constructor(
     private val _currentAssetIndex = MutableStateFlow(0)
     val currentAssetIndex: StateFlow<Int> = _currentAssetIndex.asStateFlow()
 
+    private var mode: PlaybackMode = PlaybackMode.FULL_SCREEN
     private var assets: List<AssetInfo> = emptyList()
+    private var playlistAssets: List<AssetInfo> = emptyList()
     private var localFiles: Map<String, File> = emptyMap()
     private var playlistInfo: PlaylistInfo? = null
-    private var campaignName: String? = null
+    private var playlistVersion: Int? = null
     private var currentTickers: List<TickerDisplayConfig> = emptyList()
 
-    private var currentPopStartTime: Instant? = null
-    private var currentPopAssetName: String? = null
-    private var currentPopLogged: Boolean = false
+    private var activePopSession: PlaybackSession? = null
 
     private var advanceJob: Job? = null
     private var revisionPollJob: Job? = null
@@ -81,14 +78,20 @@ class PlaybackViewModel @Inject constructor(
     }
 
     private fun currentSnapshot(): PlaybackSnapshot? {
-        if (assets.isEmpty()) return null
+        if (playlistAssets.isEmpty() && assets.isEmpty()) return null
         return PlaybackSnapshot(
+            mode = PlaybackMode.FULL_SCREEN,
             assets = assets,
             localFiles = localFiles,
             playlistInfo = playlistInfo,
-            campaignName = campaignName,
+            playlistVersion = playlistVersion,
+            layoutVersion = null,
+            layout = null,
+            playlistAssets = playlistAssets,
             currentIndex = _currentAssetIndex.value,
-            tickers = currentTickers
+            tickers = currentTickers,
+            zones = emptyList(),
+            zoneIndices = emptyMap()
         )
     }
 
@@ -96,15 +99,13 @@ class PlaybackViewModel @Inject constructor(
         viewModelScope.launch {
             SyncDiagnostics.logStartupDevice(securePrefs)
 
-            // Case 2: previously synced — start immediately from local cache
             val cached = contentSyncCoordinator.loadCachedSnapshot()
-            if (cached != null && cached.assets.any { it.isPlayable(cached.localFiles) }) {
+            if (cached != null && snapshotIsPlayable(cached)) {
                 applySnapshot(cached, structureChanged = true)
             } else {
                 _uiState.value = PlaybackUiState.Loading
             }
 
-            // Attempt network sync (updates cache when online)
             when (val outcome = contentSyncCoordinator.syncContent(
                 current = currentSnapshot(),
                 force = true,
@@ -136,7 +137,7 @@ class PlaybackViewModel @Inject constructor(
                 is SyncOutcome.Unchanged -> {
                     if (currentSnapshot() == null) {
                         val fallback = contentSyncCoordinator.loadCachedSnapshot()
-                        if (fallback != null && fallback.assets.any { it.isPlayable(fallback.localFiles) }) {
+                        if (fallback != null && snapshotIsPlayable(fallback)) {
                             applySnapshot(fallback, structureChanged = true)
                         } else {
                             val reason = "Sync unchanged and no playable local cache"
@@ -150,7 +151,6 @@ class PlaybackViewModel @Inject constructor(
         }
     }
 
-    /** Resume sync + telemetry flush when network returns. */
     private fun startNetworkReconnectSync() {
         viewModelScope.launch {
             networkMonitor.observeOnline().collect { online ->
@@ -162,12 +162,6 @@ class PlaybackViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Three-tier near-real-time sync:
-     * 1. SSE push (instant) via /player/events
-     * 2. Lightweight revision poll every 5s via /player/sync-revision
-     * 3. Full sync fallback every 15s when revision endpoint unavailable
-     */
     private fun startRealtimeSync() {
         playerEventStreamClient.start(viewModelScope)
 
@@ -223,10 +217,8 @@ class PlaybackViewModel @Inject constructor(
             )) {
                 is SyncOutcome.Unpaired -> handleUnpaired()
                 is SyncOutcome.NoContent -> {
-                    advanceJob?.cancel()
-                    assets = emptyList()
-                    localFiles = emptyMap()
-                    playlistInfo = null
+                    cancelAllPlaybackJobs()
+                    clearPlaybackState()
                     _uiState.value = PlaybackUiState.NoContent
                 }
                 is SyncOutcome.Updated -> {
@@ -246,7 +238,7 @@ class PlaybackViewModel @Inject constructor(
     }
 
     private fun applySnapshotIfPlayable(snapshot: PlaybackSnapshot, structureChanged: Boolean) {
-        if (snapshot.assets.any { it.isPlayable(snapshot.localFiles) }) {
+        if (snapshotIsPlayable(snapshot)) {
             applySnapshot(snapshot, structureChanged)
         } else {
             SyncDiagnostics.logPlayabilityCheck(snapshot.assets, snapshot.localFiles)
@@ -261,26 +253,28 @@ class PlaybackViewModel @Inject constructor(
     }
 
     private fun applySnapshot(snapshot: PlaybackSnapshot, structureChanged: Boolean) {
-        val previousAssets = assets
+        val previousAssets = playlistAssets
+        mode = PlaybackMode.FULL_SCREEN
         assets = snapshot.assets
+        playlistAssets = snapshot.playlistAssets.ifEmpty { snapshot.assets }
         localFiles = snapshot.localFiles
         playlistInfo = snapshot.playlistInfo
-        campaignName = snapshot.campaignName
+        playlistVersion = snapshot.playlistVersion
         currentTickers = snapshot.tickers
         _currentAssetIndex.value = snapshot.currentIndex
 
+        cancelAllPlaybackJobs()
         val durationsChanged = previousAssets.isNotEmpty() &&
-            snapshot.assets.size == previousAssets.size &&
-            snapshot.assets.zip(previousAssets).any { (current, previous) ->
-                current.id == previous.id && current != previous
+            playlistAssets.size == previousAssets.size &&
+            playlistAssets.zip(previousAssets).any { (current, prior) ->
+                current.id == prior.id && current != prior
             }
-
-        emitCurrentAsset()
+        emitFullScreen()
         SyncDiagnostics.logPlaybackStart(
             playlistName = playlistInfo?.name.orEmpty(),
-            assetName = assets.getOrNull(_currentAssetIndex.value)?.name.orEmpty(),
+            assetName = playlistAssets.getOrNull(_currentAssetIndex.value)?.name.orEmpty(),
             assetIndex = _currentAssetIndex.value,
-            total = assets.size
+            total = playlistAssets.size
         )
         if (structureChanged || durationsChanged || advanceJob == null || advanceJob?.isActive != true) {
             scheduleCurrentAsset()
@@ -291,67 +285,97 @@ class PlaybackViewModel @Inject constructor(
         advanceJob?.cancel()
         advanceJob = viewModelScope.launch {
             val index = _currentAssetIndex.value
-            if (index >= assets.size) return@launch
+            if (index >= playlistAssets.size) return@launch
 
-            val asset = assets[index]
+            val asset = playlistAssets[index]
+            val playlistName = playlistInfo?.name.orEmpty()
+
             if (!asset.isPlayable(localFiles)) {
-                completePopTracking(asset.name, "FAILED")
+                beginPopSession(asset, playlistName)
+                finalizePopSession("FAILED")
                 advanceToNextAsset()
                 return@launch
             }
 
-            preparePopTracking(asset)
-
+            beginPopSession(asset, playlistName)
             delay(asset.playbackDurationMs())
-
-            if (!currentPopLogged) {
-                completePopTracking(asset.name, "VERIFIED")
-            }
-
+            finalizePopSession("VERIFIED")
             advanceToNextAsset()
         }
     }
 
-    private fun preparePopTracking(asset: AssetInfo) {
-        currentPopAssetName = asset.name
-        currentPopLogged = false
-        currentPopStartTime = if (asset.deferPopStartUntilReady()) null else Instant.now()
-    }
-
-    /** Called when video playback or web content is actually ready. */
-    fun onPlaybackStarted(assetName: String) {
-        if (currentPopAssetName == assetName && !currentPopLogged) {
-            currentPopStartTime = Instant.now()
+    private suspend fun beginPopSession(asset: AssetInfo, playlistName: String) {
+        activePopSession?.takeIf { !it.finalized }?.let { dangling ->
+            finalizePopSession("VERIFIED", dangling)
         }
+
+        val session = PlaybackSession(
+            assetId = asset.id,
+            assetName = asset.name,
+            playlistName = playlistName,
+            configuredDurationSeconds = asset.durationSeconds.coerceAtLeast(1),
+            slotStartTime = Instant.now()
+        )
+        if (!asset.deferPopStartUntilReady()) {
+            session.contentReadyTime = session.slotStartTime
+        }
+        activePopSession = session
+        PopSessionLogger.logSessionStarted(session)
+        emitFullScreen()
     }
 
-    private suspend fun completePopTracking(assetName: String, status: String) {
-        if (currentPopLogged) return
+    fun onPlaybackStarted(assetName: String) {
+        val session = activePopSession ?: return
+        if (session.finalized) return
+        if (session.assetName != assetName) return
+        if (session.contentReadyTime != null) return
+        val readyTime = Instant.now()
+        session.contentReadyTime = readyTime
+        PopSessionLogger.logContentReady(session, readyTime)
+    }
 
-        val startTime = currentPopStartTime ?: Instant.now()
-        val endTime = Instant.now()
+    private suspend fun finalizePopSession(
+        status: String,
+        session: PlaybackSession? = activePopSession
+    ) {
+        val active = session ?: return
+        if (active.finalized) return
+        active.finalized = true
+
+        val startTime = active.effectiveStartTime()
+        val endTime = active.effectiveEndTime(status)
+        val durationSeconds = active.effectiveDurationSeconds(status)
+
+        PopSessionLogger.logSessionEnded(
+            session = active,
+            startTime = startTime,
+            endTime = endTime,
+            durationSeconds = durationSeconds,
+            status = status
+        )
 
         val record = if (status == "FAILED") {
             PopLogRecord.failed(
                 deviceName = deviceDisplayName(),
-                playlistName = playlistInfo?.name.orEmpty(),
-                campaignName = campaignName.orEmpty(),
-                assetName = assetName,
+                playlistName = active.playlistName,
+                assetName = active.assetName,
                 startTime = startTime,
                 endTime = endTime
             )
         } else {
             PopLogRecord.verified(
                 deviceName = deviceDisplayName(),
-                playlistName = playlistInfo?.name.orEmpty(),
-                campaignName = campaignName.orEmpty(),
-                assetName = assetName,
+                playlistName = active.playlistName,
+                assetName = active.assetName,
                 startTime = startTime,
-                endTime = endTime
+                endTime = endTime,
+                durationSeconds = durationSeconds
             )
         }
 
-        currentPopLogged = true
+        if (active === activePopSession) {
+            activePopSession = null
+        }
         queuePopLog(record)
     }
 
@@ -364,47 +388,75 @@ class PlaybackViewModel @Inject constructor(
         securePrefs.deviceName?.takeIf { it.isNotBlank() } ?: "Orion Display"
 
     private fun advanceToNextAsset() {
-        if (assets.isEmpty()) return
-        val nextIndex = (_currentAssetIndex.value + 1) % assets.size
+        if (playlistAssets.isEmpty()) return
+        val nextIndex = (_currentAssetIndex.value + 1) % playlistAssets.size
         _currentAssetIndex.value = nextIndex
-        emitCurrentAsset()
         scheduleCurrentAsset()
     }
 
     private fun AssetInfo.playbackDurationMs(): Long =
         durationSeconds.coerceAtLeast(1) * 1000L
 
-    private fun emitCurrentAsset() {
+    private fun emitFullScreen() {
         val index = _currentAssetIndex.value
-        if (index < assets.size) {
-            val asset = assets[index]
-            val file = localFiles[asset.id]
-            _uiState.value = PlaybackUiState.Playing(
-                asset = asset,
-                localFile = file,
-                currentIndex = index,
-                totalAssets = assets.size,
-                playlistName = playlistInfo?.name ?: "",
-                tickers = currentTickers
+        if (index >= playlistAssets.size) return
+        val asset = playlistAssets[index]
+        if (!networkMonitor.isOnline) {
+            CacheDownloadLogger.logOfflinePlayback(
+                playlistName = playlistInfo?.name.orEmpty(),
+                assetName = asset.name
             )
+        }
+        _uiState.value = PlaybackUiState.PlayingFullScreen(
+            asset = asset,
+            localFile = localFiles[asset.id],
+            currentIndex = index,
+            totalAssets = playlistAssets.size,
+            playlistName = playlistInfo?.name.orEmpty(),
+            tickers = currentTickers,
+            playbackSessionId = activePopSession?.sessionId.orEmpty()
+        )
+    }
+
+    private fun snapshotIsPlayable(snapshot: PlaybackSnapshot): Boolean {
+        val playlist = snapshot.playlistAssets.ifEmpty { snapshot.assets }
+        return playlist.any { it.isPlayable(snapshot.localFiles) }
+    }
+
+    private fun clearPlaybackState() {
+        assets = emptyList()
+        playlistAssets = emptyList()
+        localFiles = emptyMap()
+        playlistInfo = null
+        currentTickers = emptyList()
+    }
+
+    private fun cancelAllPlaybackJobs() {
+        advanceJob?.cancel()
+        activePopSession?.takeIf { !it.finalized }?.let { session ->
+            viewModelScope.launch {
+                finalizePopSession("VERIFIED", session)
+            }
         }
     }
 
     fun onAssetFailed(assetName: String) {
-        viewModelScope.launch {
-            completePopTracking(assetName, "FAILED")
-        }
         advanceJob?.cancel()
-        advanceToNextAsset()
+        viewModelScope.launch {
+            activePopSession?.takeIf { it.assetName == assetName && !it.finalized }?.let {
+                finalizePopSession("FAILED", it)
+            }
+            advanceToNextAsset()
+        }
     }
 
-    fun onUrlLoadSuccess(assetName: String) {
-        onPlaybackStarted(assetName)
-    }
+    fun onUrlLoadSuccess(assetName: String) = onPlaybackStarted(assetName)
 
     fun onUrlLoadFailed(assetName: String) {
         viewModelScope.launch {
-            completePopTracking(assetName, "FAILED")
+            activePopSession?.takeIf { it.assetName == assetName && !it.finalized }?.let {
+                finalizePopSession("FAILED", it)
+            }
         }
     }
 
@@ -414,9 +466,7 @@ class PlaybackViewModel @Inject constructor(
             while (true) {
                 delay(60_000L)
                 try {
-                    val currentAsset = if (_currentAssetIndex.value < assets.size) {
-                        assets[_currentAssetIndex.value].name
-                    } else null
+                    val currentAsset = playlistAssets.getOrNull(_currentAssetIndex.value)?.name
 
                     val response = telemetryRepository.sendHeartbeat(
                         cpu = deviceHealthUtil.getCpuUsage().coerceAtLeast(0),
@@ -468,7 +518,7 @@ class PlaybackViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         playerEventStreamClient.stop()
-        advanceJob?.cancel()
+        cancelAllPlaybackJobs()
         revisionPollJob?.cancel()
         fullSyncFallbackJob?.cancel()
         heartbeatJob?.cancel()
@@ -481,13 +531,14 @@ sealed class PlaybackUiState {
     data class Downloading(val current: Int, val total: Int) : PlaybackUiState()
     data class WaitingForInitialDownload(val reason: String = "No local content available") : PlaybackUiState()
     data object NoContent : PlaybackUiState()
-    data class Playing(
+    data class PlayingFullScreen(
         val asset: AssetInfo,
         val localFile: File?,
         val currentIndex: Int,
         val totalAssets: Int,
         val playlistName: String,
-        val tickers: List<TickerDisplayConfig> = emptyList()
+        val tickers: List<TickerDisplayConfig> = emptyList(),
+        val playbackSessionId: String = ""
     ) : PlaybackUiState()
     data class Error(val message: String) : PlaybackUiState()
 }

@@ -14,7 +14,8 @@ object TickerLogger {
             Log.i(
                 TAG,
                 "Ticker received: id=${ticker.id} scope=${ticker.scope} " +
-                    "priority=${ticker.priority} text=${ticker.text.take(80)}"
+                    "priority=${ticker.priority} isActive=${ticker.isActive} " +
+                    "heightPercent=${ticker.heightPercent} text=${ticker.text?.take(80).orEmpty()}"
             )
         }
     }

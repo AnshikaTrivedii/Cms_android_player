@@ -1,25 +1,26 @@
 package com.orion.player.data.repository
 
-import android.content.Context
+import android.util.Log
+import com.orion.player.data.cache.CacheDownloadLogger
+import com.orion.player.data.cache.ContentCacheManager
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType
 import com.orion.player.data.remote.AssetType.normalizedType
-import com.orion.player.data.remote.AssetType.requiresDownload
+import com.orion.player.data.remote.AssetType.remoteSourceUrl
+import com.orion.player.data.remote.AssetType.requiresDownload as assetTypeRequiresDownload
 import com.orion.player.data.remote.OrionPlayerApi
 import com.orion.player.data.remote.SyncResponse
 import com.orion.player.data.remote.SyncRevisionResponse
 import com.orion.player.data.sync.SyncDiagnostics
+import com.orion.player.util.NetworkDiagnostics
+import com.orion.player.util.retryOnNetworkFailure
 import com.orion.player.util.SessionGuard
-import com.orion.player.util.UrlSecurityUtil
-import android.util.Log
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
-import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,7 +31,7 @@ private const val TAG = "OrionSync"
 
 /**
  * Repository for content synchronization and asset caching.
- * Downloads assets to internal cache and provides local file paths for playback.
+ * Downloads only assets from the current playlist manifest into [ContentCacheManager]'s directory.
  */
 @Singleton
 class ContentRepository @Inject constructor(
@@ -38,104 +39,90 @@ class ContentRepository @Inject constructor(
     private val securePrefs: SecurePrefs,
     private val sessionGuard: SessionGuard,
     private val okHttpClient: OkHttpClient,
-    @ApplicationContext private val context: Context
+    private val contentCacheManager: ContentCacheManager
 ) {
     private val cacheDir: File
-        get() = File(context.cacheDir, "orion_assets").also { it.mkdirs() }
+        get() = contentCacheManager.getContentDirectory()
 
-    /**
-     * Fetches the current playlist manifest from the backend.
-     * Returns null if the device token is missing (not paired).
-     */
-    suspend fun syncPlaylist(): SyncResponse? {
+    fun getContentCacheDirectory(): File = cacheDir
+
+    fun getContentCacheStats() = contentCacheManager.getCacheStats()
+
+    suspend fun syncPlaylist(
+        playlistVersion: Int? = null,
+        layoutVersion: Int? = null,
+        knownAssetIds: List<String>? = null,
+        assetVersions: Map<String, Int>? = null
+    ): SyncResponse? {
         if (!sessionGuard.isPairedWithToken()) return null
+        NetworkDiagnostics.warmUpServer(okHttpClient)
         val token = sessionGuard.requirePairedToken()
-        return api.syncPlaylist(token)
+        return retryOnNetworkFailure(endpoint = "GET /player/sync", maxAttempts = 4) {
+            api.syncPlaylist(
+                token = token,
+                playlistVersion = playlistVersion,
+                layoutVersion = layoutVersion,
+                knownAssetIds = knownAssetIds?.takeIf { it.isNotEmpty() }?.joinToString(","),
+                assetVersions = assetVersions?.takeIf { it.isNotEmpty() }
+                    ?.entries
+                    ?.joinToString(",") { "${it.key}:${it.value}" }
+            )
+        }
     }
 
-    /**
-     * Lightweight content revision check (~few bytes).
-     * Used for near-real-time polling without downloading the full manifest.
-     */
     suspend fun getSyncRevision(): SyncRevisionResponse {
         val token = sessionGuard.requirePairedToken()
         return api.getSyncRevision(token)
     }
 
-    /**
-     * Downloads an asset to local cache if not already cached.
-     * Uses a temporary file during download to prevent corrupted partial files.
-     * Returns the local File path, or null on failure.
-     */
     suspend fun downloadAsset(asset: AssetInfo): File? = withContext(Dispatchers.IO) {
+        CacheDownloadLogger.logDownloadStarted(asset)
         SyncDiagnostics.logDownloadStarted(asset)
 
-        if (!asset.requiresDownload()) {
-            SyncDiagnostics.logDownloadFailed(asset, "type ${asset.type} does not require download")
+        if (!asset.assetTypeRequiresDownload()) {
+            val reason = "type ${asset.type} does not require download"
+            CacheDownloadLogger.logDownloadFailed(asset, reason)
+            SyncDiagnostics.logDownloadFailed(asset, reason)
             return@withContext null
         }
 
-        if (asset.normalizedType() == AssetType.URL) {
-            val file = downloadUrlSnapshot(asset)
-            if (file != null) {
-                SyncDiagnostics.logDownloadSuccess(asset, file)
-            } else {
-                SyncDiagnostics.logDownloadFailed(
-                    asset,
-                    when {
-                        asset.url.isNullOrBlank() -> "URL asset missing url field"
-                        else -> "URL snapshot fetch failed"
-                    }
-                )
+        val localFile = getLocalFile(asset)
+        val cached = findCachedFileForAsset(asset)
+        if (cached != null && isCachedAssetValid(cached, asset.fileSize)) {
+            CacheDownloadLogger.logCacheHit(asset, cached)
+            SyncDiagnostics.logDownloadSuccess(asset, cached)
+            return@withContext cached
+        }
+
+        val sourceUrl = asset.remoteSourceUrl()
+        if (sourceUrl.isNullOrBlank()) {
+            val reason = "missing downloadUrl and url"
+            CacheDownloadLogger.logDownloadFailed(asset, reason)
+            SyncDiagnostics.logDownloadFailed(asset, reason)
+            return@withContext null
+        }
+
+        val downloaded = try {
+            retryOnNetworkFailure(
+                endpoint = "download ${asset.name}",
+                maxAttempts = 3
+            ) {
+                downloadToCache(localFile, sourceUrl, asset.fileSize)
+                    ?: throw java.io.IOException("HTTP download failed for ${asset.name}")
             }
-            return@withContext file
-        }
-
-        val localFile = getLocalFile(asset)
-
-        if (isCachedAssetValid(localFile, asset.fileSize)) {
-            SyncDiagnostics.logDownloadSuccess(asset, localFile)
-            return@withContext localFile
-        }
-
-        val legacyFile = findLegacyCachedFile(asset)
-        if (legacyFile != null && isCachedAssetValid(legacyFile, asset.fileSize)) {
-            SyncDiagnostics.logDownloadSuccess(asset, legacyFile)
-            return@withContext legacyFile
-        }
-
-        val downloadUrl = asset.downloadUrl
-        if (downloadUrl.isNullOrBlank()) {
-            SyncDiagnostics.logDownloadFailed(asset, "missing downloadUrl")
+        } catch (e: Exception) {
+            CacheDownloadLogger.logDownloadFailed(asset, e.message ?: "download failed")
+            SyncDiagnostics.logDownloadFailed(asset, e.message ?: "download failed")
             return@withContext null
         }
 
-        val downloaded = downloadToCache(localFile, downloadUrl, asset.fileSize)
-        if (downloaded != null) {
-            SyncDiagnostics.logDownloadSuccess(asset, downloaded)
-        } else {
-            SyncDiagnostics.logDownloadFailed(asset, "HTTP download failed for ${asset.name}")
-        }
+        CacheDownloadLogger.logDownloadCompleted(asset, downloaded)
+        SyncDiagnostics.logDownloadSuccess(asset, downloaded)
         downloaded
-    }
-
-    /**
-     * Caches a snapshot of a URL asset during sync for offline fallback playback.
-     */
-    private fun downloadUrlSnapshot(asset: AssetInfo): File? {
-        val remoteUrl = UrlSecurityUtil.normalizeUrl(asset.url) ?: return null
-        val localFile = getLocalFile(asset)
-
-        if (isCachedAssetValid(localFile, asset.fileSize)) {
-            return localFile
-        }
-
-        return downloadToCache(localFile, remoteUrl, asset.fileSize)
     }
 
     private fun isCachedAssetValid(localFile: File, expectedSize: Int): Boolean {
         if (!localFile.exists() || localFile.length() == 0L) return false
-        // Presigned URLs and HTML snapshots may not match CMS fileSize exactly.
         if (expectedSize > 0 && localFile.length() != expectedSize.toLong()) {
             Log.w(
                 TAG,
@@ -190,9 +177,7 @@ class ContentRepository @Inject constructor(
     }
 
     /**
-     * Downloads all assets from a sync response that aren't already cached.
-     * Reports progress via the optional [onProgress] callback (completed count, total count).
-     * Returns a map of asset ID → local File.
+     * Downloads playlist assets not yet on disk. Skips assets already cached (playlist change reuse).
      */
     suspend fun downloadAllAssets(
         assets: List<AssetInfo>,
@@ -200,15 +185,16 @@ class ContentRepository @Inject constructor(
     ): Map<String, File> {
         val result = mutableMapOf<String, File>()
 
-        val downloadableAssets = assets.filter { it.requiresDownload() }
+        val downloadableAssets = assets.filter { asset ->
+            asset.assetTypeRequiresDownload() && !isAssetCached(asset)
+        }
 
         for ((index, asset) in downloadableAssets.withIndex()) {
             val file = downloadAsset(asset)
             if (file != null) {
                 result[asset.id] = file
             } else {
-                val existing = findCachedFileForAsset(asset)
-                if (existing != null) {
+                findCachedFileForAsset(asset)?.let { existing ->
                     result[asset.id] = existing
                 }
             }
@@ -222,83 +208,60 @@ class ContentRepository @Inject constructor(
         return result
     }
 
-    /**
-     * Returns the local file path for a given asset.
-     */
     fun getLocalFile(asset: AssetInfo): File {
-        val extension = when (asset.normalizedType()) {
-            AssetType.URL, AssetType.HTML -> "html"
-            else -> asset.name.substringAfterLast('.', "bin")
-        }
-        return File(cacheDir, "${asset.cacheKey()}.$extension")
+        return File(cacheDir, "${asset.cacheKey()}.${asset.fileExtension()}")
     }
 
-    /**
-     * Checks if an asset is already cached locally.
-     */
+    private fun AssetInfo.fileExtension(): String = when (normalizedType()) {
+        AssetType.URL, AssetType.HTML -> "html"
+        AssetType.VIDEO -> when {
+            mimeType.contains("webm", ignoreCase = true) -> "webm"
+            mimeType.contains("mp4", ignoreCase = true) -> "mp4"
+            else -> name.substringAfterLast('.', "mp4")
+        }
+        AssetType.IMAGE -> when {
+            mimeType.contains("png", ignoreCase = true) -> "png"
+            mimeType.contains("jpeg", ignoreCase = true) ||
+                mimeType.contains("jpg", ignoreCase = true) -> "jpg"
+            mimeType.contains("gif", ignoreCase = true) -> "gif"
+            else -> name.substringAfterLast('.', "jpg")
+        }
+        else -> name.substringAfterLast('.', "bin")
+    }
+
     fun isAssetCached(asset: AssetInfo): Boolean {
         val file = findCachedFileForAsset(asset) ?: return false
         return isCachedAssetValid(file, asset.fileSize)
     }
 
-    /**
-     * Resolves a cached file by canonical key or legacy key prefix (pre-v1.0.8 cache keys).
-     */
     fun findCachedFileForAsset(asset: AssetInfo): File? {
         val canonical = getLocalFile(asset)
         if (canonical.exists() && canonical.length() > 0L) return canonical
         return findLegacyCachedFile(asset)
     }
 
-    fun countCacheFilesOnDisk(): Int =
-        cacheDir.listFiles()?.count { it.isFile && !it.name.endsWith(".tmp") } ?: 0
+    fun countCacheFilesOnDisk(): Int = contentCacheManager.countCacheFiles()
 
     private fun findLegacyCachedFile(asset: AssetInfo): File? {
-        val extension = when (asset.normalizedType()) {
-            AssetType.URL, AssetType.HTML -> "html"
-            else -> asset.name.substringAfterLast('.', "bin")
-        }
-        val prefix = "${asset.id}_"
+        val extension = asset.fileExtension()
+        val exactName = "${asset.id}.$extension"
+        val hashedPrefix = "${asset.id}_"
         return cacheDir.listFiles()
             ?.asSequence()
             ?.filter { it.isFile && !it.name.endsWith(".tmp") }
-            ?.filter { it.name.startsWith(prefix) && it.name.endsWith(".$extension") }
+            ?.filter { file ->
+                file.name == exactName ||
+                    (file.name.startsWith(hashedPrefix) && file.name.endsWith(".$extension"))
+            }
             ?.firstOrNull { it.length() > 0L }
     }
 
-    /**
-     * Cleans up cached files that are no longer in the current playlist.
-     */
-    suspend fun cleanupStaleCache(currentCacheKeys: Set<String>) = withContext(Dispatchers.IO) {
-        cacheDir.listFiles()?.forEach { file ->
-            // Skip temp files — they may be actively downloading
-            if (file.name.endsWith(".tmp")) return@forEach
-
-            val cacheKey = file.nameWithoutExtension
-            if (cacheKey !in currentCacheKeys) {
-                file.delete()
-            }
-        }
+    /** Removes files not referenced by the current playlist asset IDs. */
+    suspend fun cleanupStaleCache(currentAssetIds: Set<String>) = withContext(Dispatchers.IO) {
+        contentCacheManager.cleanupUnreferencedFiles(currentAssetIds)
     }
 
     fun getCacheKey(asset: AssetInfo): String = asset.cacheKey()
 
-    private fun AssetInfo.cacheKey(): String {
-        // Stable per asset — do not include presigned downloadUrl (rotates every sync).
-        val fingerprint = listOf(
-            id,
-            name,
-            type,
-            mimeType,
-            fileSize.toString(),
-            url.orEmpty()
-        ).joinToString("|")
-
-        val hash = MessageDigest.getInstance("SHA-256")
-            .digest(fingerprint.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-            .take(12)
-
-        return "${id}_$hash"
-    }
+    private fun AssetInfo.cacheKey(): String = id
 }

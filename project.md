@@ -15,7 +15,7 @@ Copy the following text and provide it to your AI assistant or Android developer
 Build a robust, kiosk-mode Android application for a Digital Signage system ("Digital-Signage-Orion"). The app must run seamlessly on Android-based displays or TV boxes, fetching content from a NestJS backend and playing it in a continuous loop.
 
 **Context:**
-Our platform has a backend (NestJS) that manages `Organizations`, `Campaigns`, `Playlists`, and `Assets` (Images, Videos, HTML). The backend API is already fully implemented and documented in detail below. The Android player will consume these APIs.
+Our platform has a backend (NestJS) that manages `Organizations`, `Playlists`, and `Assets` (Images, Videos, HTML). Playlists link directly to assets via a `PlaylistAsset` join (`Playlist → PlaylistAsset → Asset`). The backend API is already fully implemented and documented in detail below. The Android player will consume these APIs.
 
 **Core Requirements:**
 
@@ -146,7 +146,7 @@ Send device health telemetry. Call every ~60 seconds.
   "cpu": 35,
   "ram": 62,
   "temp": 42,
-  "currentContent": "Summer Sale Campaign"
+  "currentContent": "Autumn Lookbook"
 }
 ```
 - `cpu`: integer 0–100 (CPU usage %)

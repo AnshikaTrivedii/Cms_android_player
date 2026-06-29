@@ -8,6 +8,9 @@ import com.orion.player.data.local.MIGRATION_2_3
 import com.orion.player.data.local.MIGRATION_3_4
 import com.orion.player.data.local.MIGRATION_4_5
 import com.orion.player.data.local.MIGRATION_5_6
+import com.orion.player.data.local.MIGRATION_6_7
+import com.orion.player.data.local.MIGRATION_7_8
+import com.orion.player.data.local.MIGRATION_8_9
 import com.orion.player.data.local.OrionDatabase
 import com.orion.player.data.local.HeartbeatQueueDao
 import com.orion.player.data.local.PlaylistCacheDao
@@ -18,6 +21,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import com.orion.player.data.remote.GsonConfig
 import com.orion.player.util.ApiLoggingInterceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -62,7 +66,7 @@ object AppModule {
         return Retrofit.Builder()
             .baseUrl(BuildConfig.BASE_URL)
             .client(okHttpClient)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(GsonConverterFactory.create(GsonConfig.create()))
             .build()
     }
 
@@ -82,7 +86,7 @@ object AppModule {
             OrionDatabase::class.java,
             "orion_player_db"
         )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
             .build()
     }
 

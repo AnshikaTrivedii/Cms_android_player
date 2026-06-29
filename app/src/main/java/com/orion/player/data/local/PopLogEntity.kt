@@ -13,7 +13,6 @@ data class PopLogEntity(
     val id: Long = 0,
     val deviceName: String,
     val playlistName: String,
-    val campaignName: String,
     val assetName: String,
     val startTime: String,       // ISO 8601
     val endTime: String,         // ISO 8601

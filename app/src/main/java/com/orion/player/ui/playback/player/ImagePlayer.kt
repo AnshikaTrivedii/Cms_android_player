@@ -13,13 +13,15 @@ import java.io.File
 
 /**
  * Full-screen image player using Coil.
- * Displays the image with center-crop scaling.
+ * Displays the image with center-crop scaling from a local file or remote URL.
  */
 @Composable
 fun ImagePlayer(
-    file: File,
+    file: File? = null,
+    url: String? = null,
     modifier: Modifier = Modifier
 ) {
+    val model = file ?: url ?: return
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -27,7 +29,7 @@ fun ImagePlayer(
         contentAlignment = Alignment.Center
     ) {
         AsyncImage(
-            model = file,
+            model = model,
             contentDescription = "Digital signage content",
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize()

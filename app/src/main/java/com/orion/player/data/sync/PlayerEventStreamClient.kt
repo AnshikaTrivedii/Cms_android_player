@@ -22,7 +22,7 @@ import javax.inject.Singleton
  * Falls back silently when the endpoint is unavailable (404 / connection errors).
  *
  * Expected backend endpoint: GET /api/player/events (text/event-stream)
- * Events: content.updated, playlist.updated, campaign.updated, ticker.updated, sync.required
+ * Events: content.updated, playlist.updated, ticker.updated, sync.required
  */
 @Singleton
 class PlayerEventStreamClient @Inject constructor(
@@ -149,7 +149,6 @@ class PlayerEventStreamClient @Inject constructor(
         private val SYNC_EVENTS = setOf(
             "content.updated",
             "playlist.updated",
-            "campaign.updated",
             "ticker.updated",
             "sync.required",
             "content-updated",

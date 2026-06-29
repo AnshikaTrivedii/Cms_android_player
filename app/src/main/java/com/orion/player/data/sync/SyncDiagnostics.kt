@@ -5,6 +5,8 @@ import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType.isPlayable
 import com.orion.player.data.remote.AssetType.normalizedType
+import com.orion.player.data.remote.LayoutInfo
+import com.orion.player.data.remote.ZoneType
 import com.orion.player.data.remote.SyncResponse
 import com.orion.player.data.repository.ContentRepository
 import com.orion.player.data.repository.PlaylistCacheRepository
@@ -51,21 +53,47 @@ object SyncDiagnostics {
 
     fun logSyncResponse(securePrefs: SecurePrefs, response: SyncResponse) {
         val playlist = response.playlist
+        val layout = response.layout
         Log.i(
             TAG,
             "STEP 2 sync response: deviceId=${securePrefs.getOrCreateHardwareId()} " +
                 "deviceName=${securePrefs.deviceName.orEmpty()} " +
                 "playlistId=${playlist?.id.orEmpty()} " +
                 "playlistName=${playlist?.name.orEmpty()} " +
-                "campaign=${response.campaignName.orEmpty()} " +
-                "assetCount=${response.assets.size}"
+                "layoutId=${layout?.id.orEmpty()} layoutZones=${layout?.zones?.size ?: 0} " +
+                "unchanged=${response.unchanged} " +
+                "assetCount=${response.resolvedAssets().size}"
         )
-        response.assets.forEach { asset ->
+        response.resolvedAssets().forEach { asset ->
             Log.i(
                 TAG,
                 "STEP 2 asset: id=${asset.id} name=${asset.name} type=${asset.type} " +
                     "position=${asset.position} hasDownloadUrl=${!asset.downloadUrl.isNullOrBlank()} " +
                     "hasUrl=${!asset.url.isNullOrBlank()} fileSize=${asset.fileSize}"
+            )
+        }
+    }
+
+    fun logLayoutZones(layout: LayoutInfo, mergedAssets: List<AssetInfo>) {
+        Log.i(TAG, "STEP 2 layout: id=${layout.id} zones=${layout.zones.size} mergedAssets=${mergedAssets.size}")
+        layout.zones.forEach { zone ->
+            val resolvedCount = when (zone.type) {
+                ZoneType.PLAYLIST, ZoneType.IMAGE -> zone.resolvedAssets().size +
+                    (if (zone.resolvedSingleAsset() != null) 1 else 0)
+                else -> 0
+            }
+            Log.i(
+                TAG,
+                "STEP 2 zone: id=${zone.id} type=${zone.type} assetId=${zone.assetId.orEmpty()} " +
+                    "embeddedAssets=${zone.resolvedAssets().size} hasTicker=${zone.ticker != null} " +
+                    "resolvedCount=$resolvedCount"
+            )
+        }
+        mergedAssets.forEach { asset ->
+            Log.i(
+                TAG,
+                "STEP 2 merged asset: id=${asset.id} name=${asset.name} " +
+                    "hasDownloadUrl=${!asset.downloadUrl.isNullOrBlank()}"
             )
         }
     }

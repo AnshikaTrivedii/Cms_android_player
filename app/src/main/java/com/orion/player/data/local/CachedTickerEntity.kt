@@ -14,7 +14,8 @@ data class CachedTickerEntity(
     val position: String,
     val speed: String,
     val priority: String,
-    val height: String,
+    val heightPercent: Int,
+    val style: String,
     val backgroundColor: String,
     val textColor: String,
     val sortOrder: Int

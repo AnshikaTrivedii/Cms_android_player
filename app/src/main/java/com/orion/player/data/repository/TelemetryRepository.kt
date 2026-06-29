@@ -162,7 +162,6 @@ class TelemetryRepository @Inject constructor(
         PopLogEntry(
             assetName = assetName,
             playlistName = playlistName,
-            campaignName = campaignName,
             startTime = startTime,
             endTime = endTime,
             durationSeconds = durationSeconds,

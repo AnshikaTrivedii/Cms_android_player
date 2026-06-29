@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.orion.player.ui.cache.CacheDebugScreen
 import com.orion.player.ui.pairing.PairingScreen
 import com.orion.player.ui.playback.PlaybackScreen
 
@@ -13,6 +14,7 @@ import com.orion.player.ui.playback.PlaybackScreen
 object Routes {
     const val PAIRING = "pairing"
     const val PLAYBACK = "playback"
+    const val CACHE_DEBUG = "cache_debug"
 }
 
 /**
@@ -45,7 +47,16 @@ fun OrionNavGraph(
                     navController.navigate(Routes.PAIRING) {
                         popUpTo(Routes.PLAYBACK) { inclusive = true }
                     }
+                },
+                onOpenCacheDebug = {
+                    navController.navigate(Routes.CACHE_DEBUG)
                 }
+            )
+        }
+
+        composable(Routes.CACHE_DEBUG) {
+            CacheDebugScreen(
+                onBack = { navController.popBackStack() }
             )
         }
     }

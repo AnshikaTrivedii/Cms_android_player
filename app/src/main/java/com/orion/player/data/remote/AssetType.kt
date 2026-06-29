@@ -1,5 +1,7 @@
 package com.orion.player.data.remote
 
+import com.orion.player.util.UrlSecurityUtil
+
 /**
  * Normalized asset types returned by /player/sync.
  */
@@ -10,9 +12,16 @@ object AssetType {
     const val DOCUMENT = "DOCUMENT"
     const val URL = "URL"
 
-    fun AssetInfo.normalizedType(): String = type.uppercase()
+    fun AssetInfo.normalizedType(): String = when (type.uppercase()) {
+        "WEBSITE", "WEB", "LINK" -> URL
+        else -> type.uppercase()
+    }
 
     fun AssetInfo.requiresDownload(): Boolean = normalizedType() != DOCUMENT
+
+    /** Live or file source URL for download during sync. */
+    fun AssetInfo.remoteSourceUrl(): String? =
+        UrlSecurityUtil.normalizeUrl(url) ?: UrlSecurityUtil.normalizeUrl(downloadUrl)
 
     /** Playback requires a local cached file — no network during playback. */
     fun AssetInfo.isPlayable(localFiles: Map<String, java.io.File>): Boolean {

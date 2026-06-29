@@ -36,5 +36,10 @@ suspend fun <T> retryOnNetworkFailure(
 
 private fun isRetryable(e: Throwable): Boolean {
     val root = generateSequence(e) { it.cause }.last()
-    return root is java.io.IOException && root !is retrofit2.HttpException
+    if (root is retrofit2.HttpException) {
+        return root.code() in RETRYABLE_HTTP_CODES
+    }
+    return root is java.io.IOException
 }
+
+private val RETRYABLE_HTTP_CODES = setOf(408, 429, 500, 502, 503, 504)

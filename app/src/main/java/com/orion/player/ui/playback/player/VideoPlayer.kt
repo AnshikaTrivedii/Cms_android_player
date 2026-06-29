@@ -29,6 +29,7 @@ import java.io.File
 fun VideoPlayer(
     file: File,
     configuredDurationSeconds: Int,
+    playbackSessionKey: String = "",
     onPlaybackStarted: () -> Unit,
     onError: () -> Unit,
     modifier: Modifier = Modifier
@@ -36,7 +37,7 @@ fun VideoPlayer(
     val context = LocalContext.current
     val configuredDurationMs = configuredDurationSeconds.coerceAtLeast(1) * 1000L
 
-    val exoPlayer = remember(file.absolutePath) {
+    val exoPlayer = remember(file.absolutePath, playbackSessionKey) {
         var playbackStarted = false
         ExoPlayer.Builder(context).build().apply {
             val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
@@ -61,7 +62,7 @@ fun VideoPlayer(
         }
     }
 
-    LaunchedEffect(file.absolutePath, configuredDurationMs) {
+    LaunchedEffect(file.absolutePath, configuredDurationMs, playbackSessionKey) {
         delay(configuredDurationMs)
         exoPlayer.pause()
         exoPlayer.stop()
