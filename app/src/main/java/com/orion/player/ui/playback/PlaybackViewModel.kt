@@ -15,6 +15,7 @@ import com.orion.player.data.playback.PlaybackSlotLogger
 import com.orion.player.data.playback.PlaylistManifestLogger
 import com.orion.player.data.playback.inPlaylistOrder
 import com.orion.player.data.playback.hasExplicitDuration
+import com.orion.player.data.playback.DocumentFormat
 import com.orion.player.data.playback.playbackSlotDurationMs
 import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType
@@ -743,6 +744,7 @@ class PlaybackViewModel @Inject constructor(
             assetId = asset.id,
             assetName = asset.name,
             playlistName = playlistName,
+            contentType = DocumentFormat.popContentLabel(asset),
             configuredDurationSeconds = (asset.playbackSlotDurationMs() / 1000L).toInt().coerceAtLeast(1),
             slotStartTime = Instant.now()
         )

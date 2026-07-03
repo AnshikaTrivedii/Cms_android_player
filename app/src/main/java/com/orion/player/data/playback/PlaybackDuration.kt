@@ -10,7 +10,7 @@ fun AssetInfo.hasExplicitDuration(): Boolean =
 
 /**
  * Slot duration for the playback engine.
- * - Images/HTML/URL: always use configured duration (default 10s when omitted).
+ * - Images/HTML/URL/Documents: always use configured duration (default 10s when omitted).
  * - Video with explicit duration: cap at configured seconds.
  * - Video without explicit duration: 0 → play until ExoPlayer ENDED.
  */

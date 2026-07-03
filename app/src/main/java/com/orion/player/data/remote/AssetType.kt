@@ -17,21 +17,33 @@ object AssetType {
         else -> type.uppercase()
     }
 
-    fun AssetInfo.requiresDownload(): Boolean = normalizedType() != DOCUMENT
+    fun AssetInfo.requiresDownload(): Boolean = when (normalizedType()) {
+        URL -> remoteSourceUrl() != null
+        else -> true
+    }
 
     /** Live or file source URL for download during sync. */
     fun AssetInfo.remoteSourceUrl(): String? =
         UrlSecurityUtil.normalizeUrl(url) ?: UrlSecurityUtil.normalizeUrl(downloadUrl)
 
-    /** Playback requires a local cached file — no network during playback. */
+    /** Playback requires a local cached file, or a valid remote URL for URL assets. */
     fun AssetInfo.isPlayable(localFiles: Map<String, java.io.File>): Boolean {
-        val file = localFiles[id] ?: return false
-        return file.exists() && file.length() > 0L
+        return when (normalizedType()) {
+            URL -> {
+                val file = localFiles[id]
+                (file != null && file.exists() && file.length() > 0L) ||
+                    remoteSourceUrl() != null
+            }
+            else -> {
+                val file = localFiles[id] ?: return false
+                file.exists() && file.length() > 0L
+            }
+        }
     }
 
-    /** VIDEO/HTML/URL start PoP when content is actually ready, not at slot assignment. */
+    /** VIDEO/HTML/URL/DOCUMENT start PoP when content is actually ready, not at slot assignment. */
     fun AssetInfo.deferPopStartUntilReady(): Boolean =
-        normalizedType() in setOf(VIDEO, HTML, URL)
+        normalizedType() in setOf(VIDEO, HTML, URL, DOCUMENT)
 
     /**
      * Whether the playlist manifest changed (order, duration, asset version, etc.).

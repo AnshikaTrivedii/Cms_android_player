@@ -4,6 +4,7 @@ import android.util.Log
 import com.orion.player.data.cache.CacheDownloadLogger
 import com.orion.player.data.cache.ContentCacheManager
 import com.orion.player.data.local.SecurePrefs
+import com.orion.player.data.playback.DocumentFormat
 import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType
 import com.orion.player.data.remote.AssetType.normalizedType
@@ -213,7 +214,9 @@ class ContentRepository @Inject constructor(
     }
 
     private fun AssetInfo.fileExtension(): String = when (normalizedType()) {
-        AssetType.URL, AssetType.HTML -> "html"
+        AssetType.URL -> "html"
+        AssetType.HTML -> DocumentFormat.htmlExtension(this)
+        AssetType.DOCUMENT -> DocumentFormat.extensionFor(this)
         AssetType.VIDEO -> when {
             mimeType.contains("webm", ignoreCase = true) -> "webm"
             mimeType.contains("mp4", ignoreCase = true) -> "mp4"

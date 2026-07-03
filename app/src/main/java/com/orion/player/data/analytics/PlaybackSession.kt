@@ -12,6 +12,7 @@ data class PlaybackSession(
     val assetId: String,
     val assetName: String,
     val playlistName: String,
+    val contentType: String,
     val configuredDurationSeconds: Int,
     val slotStartTime: Instant,
     var contentReadyTime: Instant? = null,

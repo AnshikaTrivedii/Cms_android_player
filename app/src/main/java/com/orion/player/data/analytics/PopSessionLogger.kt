@@ -18,7 +18,7 @@ object PopSessionLogger {
         Log.i(
             TAG,
             "Session START: id=${session.sessionId} asset=${session.assetName} " +
-                "assetId=${session.assetId} playlist=${session.playlistName} " +
+                "type=${session.contentType} assetId=${session.assetId} playlist=${session.playlistName} " +
                 "slotStart=${formatTime(session.slotStartTime)} " +
                 "configuredDuration=${session.configuredDurationSeconds}s"
         )
@@ -28,7 +28,7 @@ object PopSessionLogger {
         Log.i(
             TAG,
             "Session READY: id=${session.sessionId} asset=${session.assetName} " +
-                "readyAt=${formatTime(readyTime)}"
+                "type=${session.contentType} readyAt=${formatTime(readyTime)}"
         )
     }
 
@@ -42,8 +42,8 @@ object PopSessionLogger {
         Log.i(
             TAG,
             "Session END: id=${session.sessionId} asset=${session.assetName} " +
-                "status=$status start=${formatTime(startTime)} end=${formatTime(endTime)} " +
-                "duration=${durationSeconds}s"
+                "type=${session.contentType} status=$status start=${formatTime(startTime)} " +
+                "end=${formatTime(endTime)} duration=${durationSeconds}s"
         )
     }
 

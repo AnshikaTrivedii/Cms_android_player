@@ -21,8 +21,10 @@ import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType
 import com.orion.player.data.remote.AssetType.normalizedType
 import com.orion.player.data.remote.AssetType.remoteSourceUrl
+import com.orion.player.ui.playback.player.DocumentPlayer
 import com.orion.player.ui.playback.player.HtmlPlayer
 import com.orion.player.ui.playback.player.ImagePlayer
+import com.orion.player.ui.playback.player.UrlPlayer
 import com.orion.player.ui.playback.player.VideoPlayer
 import java.io.File
 
@@ -68,36 +70,48 @@ fun AssetPlayback(
                 modifier = modifier
             )
         }
-        AssetType.HTML, AssetType.URL -> {
+        AssetType.URL -> {
+            val remoteUrl = asset.remoteSourceUrl()
+            if (remoteUrl.isNullOrBlank() && (localFile == null || !localFile.exists())) {
+                UnavailableAssetPlaceholder(modifier)
+                return
+            }
+            UrlPlayer(
+                url = remoteUrl.orEmpty(),
+                cachedFile = localFile,
+                onLoadSuccess = { onUrlLoadSuccess(asset.name) },
+                onLoadFailed = { onUrlLoadFailed(asset.name) },
+                modifier = modifier
+            )
+        }
+        AssetType.HTML -> {
             if (localFile == null || !localFile.exists()) {
                 UnavailableAssetPlaceholder(modifier)
                 return
             }
             HtmlPlayer(
                 url = localFile.toURI().toString(),
+                localFile = localFile,
                 playbackSessionKey = playbackSessionId,
-                onLoadSuccess = {
-                    if (asset.normalizedType() == AssetType.URL) {
-                        onUrlLoadSuccess(asset.name)
-                    } else {
-                        onPlaybackStarted(asset.name)
-                    }
-                },
-                onLoadFailed = {
-                    if (asset.normalizedType() == AssetType.URL) {
-                        onUrlLoadFailed(asset.name)
-                    } else {
-                        onAssetFailed(asset.name)
-                    }
-                },
+                onLoadSuccess = { onPlaybackStarted(asset.name) },
+                onLoadFailed = { onAssetFailed(asset.name) },
                 modifier = modifier
             )
         }
-        AssetType.DOCUMENT -> UnsupportedAssetPlaceholder(
-            label = "Document playback not supported",
-            subtitle = asset.name,
-            modifier = modifier
-        )
+        AssetType.DOCUMENT -> {
+            if (localFile == null || !localFile.exists()) {
+                UnavailableAssetPlaceholder(modifier)
+                return
+            }
+            DocumentPlayer(
+                file = localFile,
+                asset = asset,
+                playbackSessionKey = playbackSessionId,
+                onLoadSuccess = { onPlaybackStarted(asset.name) },
+                onLoadFailed = { onAssetFailed(asset.name) },
+                modifier = modifier
+            )
+        }
         else -> UnsupportedAssetPlaceholder(
             label = "Unsupported: ${asset.type}",
             subtitle = asset.name,
