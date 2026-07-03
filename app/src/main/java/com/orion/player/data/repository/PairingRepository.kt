@@ -3,6 +3,7 @@ package com.orion.player.data.repository
 import android.util.Log
 import com.orion.player.BuildConfig
 import com.orion.player.data.local.SecurePrefs
+import com.orion.player.data.enterprise.DeviceMetadataCollector
 import com.orion.player.data.remote.InitPairingRequest
 import com.orion.player.data.remote.InitPairingResponse
 import com.orion.player.data.remote.OrionPlayerApi
@@ -21,7 +22,8 @@ import javax.inject.Singleton
 class PairingRepository @Inject constructor(
     private val api: OrionPlayerApi,
     private val securePrefs: SecurePrefs,
-    private val okHttpClient: OkHttpClient
+    private val okHttpClient: OkHttpClient,
+    private val deviceMetadataCollector: DeviceMetadataCollector
 ) {
     suspend fun warmUpApi(): NetworkDiagnostics.WarmUpResult {
         Log.d(TAG, "Warming up API at ${BuildConfig.BASE_URL}")
@@ -34,8 +36,23 @@ class PairingRepository @Inject constructor(
         warmUpApi()
 
         Log.d(TAG, "init-pairing hardwareId=$hardwareId")
+        val registration = deviceMetadataCollector.registrationSnapshot()
         val response = retryOnNetworkFailure("POST /player/init-pairing") {
-            api.initPairing(InitPairingRequest(hardwareId))
+            api.initPairing(
+                InitPairingRequest(
+                    hardwareId = hardwareId,
+                    androidVersion = registration.androidVersion,
+                    playerVersion = registration.playerVersion,
+                    manufacturer = registration.manufacturer,
+                    deviceModel = registration.deviceModel,
+                    deviceName = registration.deviceName,
+                    ip = registration.ip,
+                    macAddress = registration.macAddress,
+                    resolution = registration.resolution,
+                    orientation = registration.orientation,
+                    timezone = registration.timezone
+                )
+            )
         }
 
         Log.d(

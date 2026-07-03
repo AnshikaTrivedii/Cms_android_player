@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import com.orion.player.data.local.SecurePrefs
+import com.orion.player.data.remote.DevicePermissionsPayload
 import com.orion.player.receiver.BootReceiver
 import com.orion.player.service.PlayerForegroundService
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -54,6 +55,21 @@ class DevicePermissionReporter @Inject constructor(
             batteryOptimizationIgnored = batteryOptIgnored,
             autoStartLikely = hasBoot && batteryOptIgnored,
             kioskModeEnabled = securePrefs.kioskModeEnabled
+        )
+    }
+
+    fun toHeartbeatPayload(): DevicePermissionsPayload {
+        val snapshot = snapshot()
+        return DevicePermissionsPayload(
+            internet = snapshot.internet,
+            storage = true,
+            foregroundService = snapshot.foregroundService,
+            bootReceiver = snapshot.bootReceiver,
+            wakeLock = snapshot.wakeLock,
+            notification = snapshot.postNotifications,
+            batteryOptimizationDisabled = snapshot.batteryOptimizationIgnored,
+            autoStart = snapshot.autoStartLikely,
+            kioskMode = snapshot.kioskModeEnabled
         )
     }
 

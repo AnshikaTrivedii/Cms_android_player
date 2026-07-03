@@ -10,7 +10,17 @@ import com.orion.player.data.ticker.TickerInfo
 // ── Pairing ────────────────────────────────────────────────
 
 data class InitPairingRequest(
-    @SerializedName("hardwareId") val hardwareId: String
+    @SerializedName("hardwareId") val hardwareId: String,
+    @SerializedName("androidVersion") val androidVersion: String? = null,
+    @SerializedName("playerVersion") val playerVersion: String? = null,
+    @SerializedName("manufacturer") val manufacturer: String? = null,
+    @SerializedName("deviceModel") val deviceModel: String? = null,
+    @SerializedName("deviceName") val deviceName: String? = null,
+    @SerializedName("ip") val ip: String? = null,
+    @SerializedName("macAddress") val macAddress: String? = null,
+    @SerializedName("resolution") val resolution: String? = null,
+    @SerializedName("orientation") val orientation: String? = null,
+    @SerializedName("timezone") val timezone: String? = null
 )
 
 data class InitPairingResponse(
@@ -29,13 +39,43 @@ data class PairingStatusResponse(
 
 // ── Heartbeat ──────────────────────────────────────────────
 
+/** Permission flags matching the CMS HeartbeatDto.permissions shape. */
+data class DevicePermissionsPayload(
+    val internet: Boolean? = null,
+    val storage: Boolean? = null,
+    val foregroundService: Boolean? = null,
+    val bootReceiver: Boolean? = null,
+    val wakeLock: Boolean? = null,
+    val notification: Boolean? = null,
+    val batteryOptimizationDisabled: Boolean? = null,
+    val autoStart: Boolean? = null,
+    val kioskMode: Boolean? = null
+)
+
 data class HeartbeatRequest(
     val cpu: Int,
     val ram: Int,
     val temp: Int,
     val currentContent: String? = null,
-    val deviceHealth: com.orion.player.data.enterprise.DeviceHealthSnapshot? = null,
-    val permissions: com.orion.player.data.enterprise.DevicePermissionSnapshot? = null
+    val currentAsset: String? = null,
+    val currentPlaylistName: String? = null,
+    val playbackStatus: String? = null,
+    val playbackUptimeSeconds: Long? = null,
+    val ip: String? = null,
+    val macAddress: String? = null,
+    val resolution: String? = null,
+    val orientation: String? = null,
+    val timezone: String? = null,
+    val androidVersion: String? = null,
+    val playerVersion: String? = null,
+    val deviceModel: String? = null,
+    val manufacturer: String? = null,
+    val deviceName: String? = null,
+    val lastSyncTime: String? = null,
+    val storageTotalBytes: Long? = null,
+    val storageFreeBytes: Long? = null,
+    val networkStatus: String? = null,
+    val permissions: DevicePermissionsPayload? = null
 )
 
 data class HeartbeatResponse(

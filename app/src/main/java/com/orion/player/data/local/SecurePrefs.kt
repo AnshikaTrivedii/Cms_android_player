@@ -39,6 +39,7 @@ class SecurePrefs @Inject constructor(
         private const val KEY_PAIRING_SECRET = "pairing_secret"
         private const val KEY_PAIRING_CODE = "pairing_code"
         private const val KEY_KIOSK_MODE = "kiosk_mode_enabled"
+        private const val KEY_LAST_SUCCESSFUL_SYNC_AT = "last_successful_sync_at"
     }
 
     /**
@@ -81,6 +82,10 @@ class SecurePrefs @Inject constructor(
     var kioskModeEnabled: Boolean
         get() = prefs.getBoolean(KEY_KIOSK_MODE, PlayerRuntimeConfig.KIOSK_MODE_ENABLED_DEFAULT)
         set(value) = prefs.edit().putBoolean(KEY_KIOSK_MODE, value).apply()
+
+    var lastSuccessfulSyncAt: String?
+        get() = prefs.getString(KEY_LAST_SUCCESSFUL_SYNC_AT, null)
+        set(value) = prefs.edit().putString(KEY_LAST_SUCCESSFUL_SYNC_AT, value).apply()
 
     fun isAuthenticated(): Boolean =
         isPaired && !deviceToken.isNullOrBlank()

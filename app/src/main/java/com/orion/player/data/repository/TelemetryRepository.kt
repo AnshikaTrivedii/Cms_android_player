@@ -5,10 +5,8 @@ import com.orion.player.BuildConfig
 import com.orion.player.data.analytics.PopLogRecord
 import com.orion.player.data.analytics.PopTelemetryLogger
 import com.orion.player.data.enterprise.CrashLogStore
-import com.orion.player.data.enterprise.DeviceHealthSnapshot
 import com.orion.player.data.enterprise.DeviceLogsUploadRequest
 import com.orion.player.data.enterprise.DeviceLogCollector
-import com.orion.player.data.enterprise.DevicePermissionSnapshot
 import com.orion.player.data.local.HeartbeatQueueDao
 import com.orion.player.data.local.PopLogDao
 import com.orion.player.data.local.QueuedHeartbeatEntity
@@ -42,50 +40,29 @@ class TelemetryRepository @Inject constructor(
         private const val FLUSH_BATCH_SIZE = 50
     }
 
-    suspend fun sendHeartbeat(
-        cpu: Int,
-        ram: Int,
-        temp: Int,
-        currentContent: String? = null,
-        deviceHealth: DeviceHealthSnapshot? = null,
-        permissions: DevicePermissionSnapshot? = null
-    ): HeartbeatResponse? {
+    suspend fun sendHeartbeat(body: HeartbeatRequest): HeartbeatResponse? {
         if (!sessionGuard.isPairedWithToken()) return null
         val token = sessionGuard.requirePairedToken()
         return try {
-            val response = api.sendHeartbeat(
-                token = token,
-                body = HeartbeatRequest(
-                    cpu = cpu,
-                    ram = ram,
-                    temp = temp,
-                    currentContent = currentContent,
-                    deviceHealth = deviceHealth,
-                    permissions = permissions
-                )
-            )
+            val response = api.sendHeartbeat(token = token, body = body)
             flushQueuedHeartbeats()
             uploadPendingCrashLog()
             response
         } catch (e: Exception) {
             Log.w(TAG, "Heartbeat failed, queuing locally: ${e.message}")
-            queueHeartbeat(cpu, ram, temp, currentContent)
+            queueHeartbeat(body)
             null
         }
     }
 
-    private suspend fun queueHeartbeat(
-        cpu: Int,
-        ram: Int,
-        temp: Int,
-        currentContent: String?
-    ) {
+    private suspend fun queueHeartbeat(body: HeartbeatRequest) {
         heartbeatQueueDao.insert(
             QueuedHeartbeatEntity(
-                cpu = cpu,
-                ram = ram,
-                temp = temp,
-                currentContent = currentContent,
+                cpu = body.cpu,
+                ram = body.ram,
+                temp = body.temp,
+                currentContent = body.currentContent,
+                payloadJson = HeartbeatPayloadCodec.encode(body),
                 recordedAt = System.currentTimeMillis()
             )
         )
@@ -102,15 +79,15 @@ class TelemetryRepository @Inject constructor(
 
             try {
                 for (heartbeat in batch) {
-                    api.sendHeartbeat(
-                        token = token,
-                        body = HeartbeatRequest(
+                    val body = heartbeat.payloadJson
+                        ?.let(HeartbeatPayloadCodec::decode)
+                        ?: HeartbeatRequest(
                             cpu = heartbeat.cpu,
                             ram = heartbeat.ram,
                             temp = heartbeat.temp,
                             currentContent = heartbeat.currentContent
                         )
-                    )
+                    api.sendHeartbeat(token = token, body = body)
                 }
                 val ids = batch.map { it.id }
                 heartbeatQueueDao.markSynced(ids)

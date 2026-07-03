@@ -220,3 +220,15 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         db.execSQL("ALTER TABLE cached_playlist_new RENAME TO cached_playlist")
     }
 }
+
+/** Persist full heartbeat payloads for offline queue replay. */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            ALTER TABLE queued_heartbeats
+            ADD COLUMN payloadJson TEXT
+            """.trimIndent()
+        )
+    }
+}

@@ -14,6 +14,7 @@ data class QueuedHeartbeatEntity(
     val ram: Int,
     val temp: Int,
     val currentContent: String?,
+    val payloadJson: String? = null,
     val recordedAt: Long,
     val isSynced: Boolean = false
 )

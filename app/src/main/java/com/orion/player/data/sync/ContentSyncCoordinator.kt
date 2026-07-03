@@ -16,6 +16,7 @@ import com.orion.player.data.remote.ZoneType
 import com.orion.player.data.remote.toZoneSnapshots
 import com.orion.player.data.remote.collectLayoutAssets
 import com.orion.player.data.enterprise.DeviceLogCollector
+import com.orion.player.data.enterprise.DeviceMetadataCollector
 import com.orion.player.data.enterprise.RemoteCommandExecutor
 import com.orion.player.data.repository.ContentRepository
 import com.orion.player.data.repository.ContentCacheRepository
@@ -79,7 +80,8 @@ class ContentSyncCoordinator @Inject constructor(
     private val contentCacheRepository: ContentCacheRepository,
     private val securePrefs: SecurePrefs,
     private val remoteCommandExecutor: RemoteCommandExecutor,
-    private val deviceLogCollector: DeviceLogCollector
+    private val deviceLogCollector: DeviceLogCollector,
+    private val deviceMetadataCollector: DeviceMetadataCollector
 ) {
     companion object {
         private const val TAG = "OrionSync"
@@ -208,11 +210,12 @@ class ContentSyncCoordinator @Inject constructor(
                     force = force,
                     onDownloadProgress = onDownloadProgress
                 )
-                if (refreshOutcome != null) return refreshOutcome
-                return SyncOutcome.Unchanged
+                if (refreshOutcome != null) return refreshOutcome.withSuccessfulSyncTimestamp()
+                return SyncOutcome.Unchanged.withSuccessfulSyncTimestamp()
             }
 
             return dispatchSyncResponse(syncResponse, cachedSnapshot, force, onDownloadProgress)
+                .withSuccessfulSyncTimestamp()
         } catch (e: HttpException) {
             if (e.code() == 401) SyncOutcome.Unpaired
             else {
@@ -791,5 +794,15 @@ class ContentSyncCoordinator @Inject constructor(
         } catch (_: HttpException) {
         } catch (_: Exception) {
         }
+    }
+
+    private fun SyncOutcome.withSuccessfulSyncTimestamp(): SyncOutcome {
+        when (this) {
+            is SyncOutcome.Updated, is SyncOutcome.Unchanged -> {
+                deviceMetadataCollector.recordSuccessfulSync()
+            }
+            else -> Unit
+        }
+        return this
     }
 }

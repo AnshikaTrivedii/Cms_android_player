@@ -22,10 +22,12 @@ import com.orion.player.data.remote.AssetType.deferPopStartUntilReady
 import com.orion.player.data.remote.AssetType.isPlayable
 import com.orion.player.data.remote.AssetType.normalizedType
 import com.orion.player.data.remote.AssetType.playlistManifestChangedFrom
+import com.orion.player.data.enterprise.DeviceMetadataCollector
 import com.orion.player.data.enterprise.DeviceHealthReporter
 import com.orion.player.data.enterprise.DeviceLogCollector
 import com.orion.player.data.enterprise.DevicePermissionReporter
 import com.orion.player.data.enterprise.RemoteCommandExecutor
+import com.orion.player.data.remote.HeartbeatRequest
 import com.orion.player.data.repository.TelemetryRepository
 import com.orion.player.data.stability.StabilityMonitor
 import com.orion.player.data.sync.ContentSyncCoordinator
@@ -69,6 +71,7 @@ class PlaybackViewModel @Inject constructor(
     private val stabilityMonitor: StabilityMonitor,
     private val deviceHealthReporter: DeviceHealthReporter,
     private val devicePermissionReporter: DevicePermissionReporter,
+    private val deviceMetadataCollector: DeviceMetadataCollector,
     private val remoteCommandExecutor: RemoteCommandExecutor,
     private val deviceLogCollector: DeviceLogCollector
 ) : ViewModel() {
@@ -943,44 +946,73 @@ class PlaybackViewModel @Inject constructor(
     private fun startHeartbeatLoop() {
         heartbeatJob?.cancel()
         heartbeatJob = viewModelScope.launch {
+            sendHeartbeatNow()
             while (true) {
                 delay(60_000L)
-                try {
-                    val currentAsset = playlistAssets.getOrNull(_currentAssetIndex.value)?.name
-                    val health = deviceHealthReporter.snapshot(
-                        playlistName = playlistInfo?.name,
-                        currentAsset = currentAsset,
-                        queueSize = playlistAssets.size
-                    )
-                    val permissions = devicePermissionReporter.snapshot()
-
-                    val response = telemetryRepository.sendHeartbeat(
-                        cpu = deviceHealthUtil.getCpuUsage().coerceAtLeast(0),
-                        ram = deviceHealthUtil.getRamUsage().coerceAtLeast(0),
-                        temp = deviceHealthUtil.getTemperature().coerceAtLeast(0),
-                        currentContent = currentAsset,
-                        deviceHealth = health,
-                        permissions = permissions
-                    )
-
-                    response?.commands?.let { remoteCommandExecutor.dispatch(it) }
-
-                    if (response?.syncRequired == true) {
-                        requestContentSync(force = true, reason = "heartbeat.syncRequired")
-                    } else if (contentSyncCoordinator.consumeRevisionIfChanged(response?.contentRevision)) {
-                        requestContentSync(force = true, reason = "heartbeat.revision")
-                    }
-
-                    telemetryRepository.flushAll()
-                    stabilityMonitor.reportIfDue(
-                        queueSize = playlistAssets.size,
-                        currentAsset = currentAsset,
-                        playlistName = playlistInfo?.name
-                    )
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                sendHeartbeatNow()
             }
+        }
+    }
+
+    private suspend fun sendHeartbeatNow() {
+        try {
+            val currentAsset = playlistAssets.getOrNull(_currentAssetIndex.value)?.name
+            val health = deviceHealthReporter.snapshot(
+                playlistName = playlistInfo?.name,
+                currentAsset = currentAsset,
+                queueSize = playlistAssets.size
+            )
+            val metadata = deviceMetadataCollector.heartbeatSnapshot(
+                currentAsset = currentAsset,
+                currentPlaylistName = playlistInfo?.name,
+                playbackStatus = health.playbackStatus,
+                playbackUptimeSeconds = health.uptimeSeconds,
+                networkOnline = health.networkOnline
+            )
+            val response = telemetryRepository.sendHeartbeat(
+                HeartbeatRequest(
+                    cpu = deviceHealthUtil.getCpuUsage().coerceAtLeast(0),
+                    ram = deviceHealthUtil.getRamUsage().coerceAtLeast(0),
+                    temp = deviceHealthUtil.getTemperature().coerceAtLeast(0),
+                    currentContent = currentAsset,
+                    currentAsset = metadata.currentAsset,
+                    currentPlaylistName = metadata.currentPlaylistName,
+                    playbackStatus = metadata.playbackStatus,
+                    playbackUptimeSeconds = metadata.playbackUptimeSeconds,
+                    ip = metadata.ip,
+                    macAddress = metadata.macAddress,
+                    resolution = metadata.resolution,
+                    orientation = metadata.orientation,
+                    timezone = metadata.timezone,
+                    androidVersion = metadata.androidVersion,
+                    playerVersion = metadata.playerVersion,
+                    deviceModel = metadata.deviceModel,
+                    manufacturer = metadata.manufacturer,
+                    deviceName = metadata.deviceName,
+                    lastSyncTime = metadata.lastSyncTime,
+                    storageTotalBytes = health.storageTotalMb * 1024L * 1024L,
+                    storageFreeBytes = health.storageFreeMb * 1024L * 1024L,
+                    networkStatus = metadata.networkStatus,
+                    permissions = devicePermissionReporter.toHeartbeatPayload()
+                )
+            )
+
+            response?.commands?.let { remoteCommandExecutor.dispatch(it) }
+
+            if (response?.syncRequired == true) {
+                requestContentSync(force = true, reason = "heartbeat.syncRequired")
+            } else if (contentSyncCoordinator.consumeRevisionIfChanged(response?.contentRevision)) {
+                requestContentSync(force = true, reason = "heartbeat.revision")
+            }
+
+            telemetryRepository.flushAll()
+            stabilityMonitor.reportIfDue(
+                queueSize = playlistAssets.size,
+                currentAsset = currentAsset,
+                playlistName = playlistInfo?.name
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
