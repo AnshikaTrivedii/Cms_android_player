@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.orion.player.data.recovery.PlayerRuntimeConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.UUID
 import javax.inject.Inject
@@ -37,6 +38,7 @@ class SecurePrefs @Inject constructor(
         private const val KEY_IS_PAIRED = "is_paired"
         private const val KEY_PAIRING_SECRET = "pairing_secret"
         private const val KEY_PAIRING_CODE = "pairing_code"
+        private const val KEY_KIOSK_MODE = "kiosk_mode_enabled"
     }
 
     /**
@@ -74,6 +76,14 @@ class SecurePrefs @Inject constructor(
     var isPaired: Boolean
         get() = prefs.getBoolean(KEY_IS_PAIRED, false)
         set(value) = prefs.edit().putBoolean(KEY_IS_PAIRED, value).apply()
+
+    /** When true, the player pins itself and returns to foreground on accidental exit. */
+    var kioskModeEnabled: Boolean
+        get() = prefs.getBoolean(KEY_KIOSK_MODE, PlayerRuntimeConfig.KIOSK_MODE_ENABLED_DEFAULT)
+        set(value) = prefs.edit().putBoolean(KEY_KIOSK_MODE, value).apply()
+
+    fun isAuthenticated(): Boolean =
+        isPaired && !deviceToken.isNullOrBlank()
 
     /**
      * Saves all pairing credentials at once.

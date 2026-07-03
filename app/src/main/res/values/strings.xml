@@ -7,4 +7,12 @@
     <string name="playback_no_content">No content assigned to this display. Please assign a playlist in the CMS.</string>
     <string name="error_connection">Connection error. Retrying…</string>
     <string name="error_retry">Retry</string>
+    <string name="foreground_service_channel_name">Orion Player Protection</string>
+    <string name="foreground_service_channel_description">Keeps playback, sync, and cache alive 24x7</string>
+    <string name="foreground_service_title">Orion Player Running</string>
+    <string name="foreground_service_text">Protecting playback, sync, and offline cache</string>
+    <string name="watchdog_channel_name">Orion Player Service</string>
+    <string name="watchdog_channel_description">Keeps the digital signage player running 24/7</string>
+    <string name="watchdog_notification_title">Orion Player Active</string>
+    <string name="watchdog_notification_text">Monitoring playback and device health</string>
 </resources>

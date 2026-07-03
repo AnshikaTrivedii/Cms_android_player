@@ -34,25 +34,34 @@ object AssetType {
         normalizedType() in setOf(VIDEO, HTML, URL)
 
     /**
-     * Whether asset content changed in ways that require re-download.
+     * Whether the playlist manifest changed (order, duration, asset version, etc.).
      * Presigned [AssetInfo.downloadUrl] values are excluded — they rotate every sync.
      */
     fun AssetInfo.hasContentChangedFrom(other: AssetInfo): Boolean =
-        name != other.name ||
-            normalizedType() != other.normalizedType() ||
-            mimeType != other.mimeType ||
-            durationSeconds != other.durationSeconds ||
-            position != other.position ||
-            fileSize != other.fileSize ||
-            url != other.url
+        !playlistManifestEquals(other)
 
-    fun List<AssetInfo>.hasSyncContentChangedFrom(previous: List<AssetInfo>): Boolean {
+    fun AssetInfo.playlistManifestEquals(other: AssetInfo): Boolean =
+        id == other.id &&
+            name == other.name &&
+            normalizedType() == other.normalizedType() &&
+            mimeType == other.mimeType &&
+            durationSeconds == other.durationSeconds &&
+            position == other.position &&
+            fileSize == other.fileSize &&
+            url == other.url &&
+            assetVersion == other.assetVersion &&
+            contentHash == other.contentHash
+
+    fun List<AssetInfo>.hasSyncContentChangedFrom(previous: List<AssetInfo>): Boolean =
+        playlistManifestChangedFrom(previous)
+
+    fun List<AssetInfo>.playlistManifestChangedFrom(previous: List<AssetInfo>): Boolean {
         if (size != previous.size) return true
-        if (map { it.id }.toSet() != previous.map { it.id }.toSet()) return true
+        if (map { it.id } != previous.map { it.id }) return true
         val previousById = previous.associateBy { it.id }
         return any { asset ->
             val prior = previousById[asset.id] ?: return@any true
-            asset.hasContentChangedFrom(prior)
+            !asset.playlistManifestEquals(prior)
         }
     }
 }

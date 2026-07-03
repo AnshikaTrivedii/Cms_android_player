@@ -20,15 +20,24 @@ data class PlaybackSession(
     /** When content became ready (video/html/url), or slot assignment for images. */
     fun effectiveStartTime(): Instant = contentReadyTime ?: slotStartTime
 
-    fun effectiveEndTime(status: String): Instant {
+    fun effectiveEndTime(status: String, actualElapsedSeconds: Int? = null): Instant {
         val start = effectiveStartTime()
-        return if (status == "VERIFIED") {
-            start.plusSeconds(configuredDurationSeconds.toLong())
-        } else {
-            start
+        return when {
+            status != "VERIFIED" -> start
+            actualElapsedSeconds != null && actualElapsedSeconds > 0 ->
+                start.plusSeconds(actualElapsedSeconds.toLong())
+            configuredDurationSeconds > 0 ->
+                start.plusSeconds(configuredDurationSeconds.toLong())
+            else -> start
         }
     }
 
-    fun effectiveDurationSeconds(status: String): Int =
-        if (status == "VERIFIED") configuredDurationSeconds.coerceAtLeast(1) else 0
+    fun effectiveDurationSeconds(status: String, actualElapsedSeconds: Int? = null): Int =
+        when {
+            status != "VERIFIED" -> 0
+            actualElapsedSeconds != null && actualElapsedSeconds > 0 ->
+                actualElapsedSeconds.coerceAtLeast(1)
+            configuredDurationSeconds > 0 -> configuredDurationSeconds.coerceAtLeast(1)
+            else -> 0
+        }
 }

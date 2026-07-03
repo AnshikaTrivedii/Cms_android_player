@@ -1,7 +1,5 @@
 package com.orion.player.ui.playback
 
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +17,11 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.foundation.clickable
@@ -47,6 +48,14 @@ fun PlaybackScreen(
     val uiState by viewModel.uiState.collectAsState()
     val isUnpaired by viewModel.isUnpaired.collectAsState()
     var debugTapCount by remember { mutableIntStateOf(0) }
+    val activity = LocalContext.current as? ComponentActivity
+
+    DisposableEffect(activity) {
+        if (activity != null) {
+            viewModel.bindScreenshotWindow { activity.window }
+        }
+        onDispose { viewModel.unbindScreenshotWindow() }
+    }
 
     LaunchedEffect(isUnpaired) {
         if (isUnpaired) onUnpaired()
@@ -87,20 +96,21 @@ fun PlaybackScreen(
             is PlaybackUiState.NoContent -> NoContentState()
             is PlaybackUiState.PlayingFullScreen -> {
                 SignageLayeredPlayback(tickers = state.tickers) {
-                    Crossfade(
-                        targetState = state.currentIndex,
-                        animationSpec = tween(durationMillis = 800),
-                        label = "assetTransition"
-                    ) { _ ->
+                    androidx.compose.runtime.key(
+                        state.playbackSessionId.ifEmpty { "idx-${state.currentIndex}" }
+                    ) {
                         AssetPlayback(
                             asset = state.asset,
                             localFile = state.localFile,
                             playbackSessionId = state.playbackSessionId,
+                            videoStopToken = state.videoStopToken,
                             modifier = Modifier.fillMaxSize(),
                             onAssetFailed = { viewModel.onAssetFailed(it) },
                             onPlaybackStarted = { viewModel.onPlaybackStarted(it) },
+                            onVideoEnded = { viewModel.onVideoEnded(it) },
                             onUrlLoadSuccess = { viewModel.onUrlLoadSuccess(it) },
-                            onUrlLoadFailed = { viewModel.onUrlLoadFailed(it) }
+                            onUrlLoadFailed = { viewModel.onUrlLoadFailed(it) },
+                            onVideoRendererPulse = { viewModel.onVideoRendererPulse() }
                         )
                     }
                 }

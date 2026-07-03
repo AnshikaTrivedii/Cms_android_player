@@ -8,12 +8,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import java.io.File
 
 /**
- * Full-screen image player using Coil.
- * Displays the image with center-crop scaling from a local file or remote URL.
+ * Full-screen image player using Coil with disk-only caching to limit heap growth
+ * during 24x7 playlist loops.
  */
 @Composable
 fun ImagePlayer(
@@ -21,7 +24,14 @@ fun ImagePlayer(
     url: String? = null,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val model = file ?: url ?: return
+    val request = ImageRequest.Builder(context)
+        .data(model)
+        .memoryCachePolicy(CachePolicy.DISABLED)
+        .crossfade(false)
+        .build()
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -29,7 +39,7 @@ fun ImagePlayer(
         contentAlignment = Alignment.Center
     ) {
         AsyncImage(
-            model = model,
+            model = request,
             contentDescription = "Digital signage content",
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize()

@@ -34,11 +34,14 @@ fun AssetPlayback(
     asset: AssetInfo,
     localFile: File?,
     playbackSessionId: String = "",
+    videoStopToken: Long = 0L,
     modifier: Modifier = Modifier,
     onAssetFailed: (String) -> Unit = {},
     onPlaybackStarted: (String) -> Unit = {},
+    onVideoEnded: (String) -> Unit = {},
     onUrlLoadSuccess: (String) -> Unit = {},
-    onUrlLoadFailed: (String) -> Unit = {}
+    onUrlLoadFailed: (String) -> Unit = {},
+    onVideoRendererPulse: () -> Unit = {}
 ) {
     when (asset.normalizedType()) {
         AssetType.IMAGE -> {
@@ -56,9 +59,11 @@ fun AssetPlayback(
             }
             VideoPlayer(
                 file = localFile,
-                configuredDurationSeconds = asset.durationSeconds,
                 playbackSessionKey = playbackSessionId,
+                stopToken = videoStopToken,
                 onPlaybackStarted = { onPlaybackStarted(asset.name) },
+                onPlaybackEnded = { onVideoEnded(asset.name) },
+                onRendererPulse = onVideoRendererPulse,
                 onError = { onAssetFailed(asset.name) },
                 modifier = modifier
             )

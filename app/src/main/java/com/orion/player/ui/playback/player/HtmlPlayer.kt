@@ -75,9 +75,12 @@ fun HtmlPlayer(
         }
     }
 
-    DisposableEffect(url) {
+    DisposableEffect(url, playbackSessionKey) {
         onDispose {
             webView.stopLoading()
+            webView.loadUrl("about:blank")
+            webView.clearHistory()
+            webView.removeAllViews()
             webView.destroy()
         }
     }

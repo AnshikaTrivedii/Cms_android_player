@@ -29,8 +29,10 @@ data class PopLogRecord(
 
     fun toApiEntry(): PopLogEntry = PopLogEntry(
         assetName = assetName,
+        content = assetName,
         playlistName = playlistName,
         startTime = startTime.toString(),
+        timestamp = startTime.toString(),
         endTime = endTime.toString(),
         durationSeconds = durationSeconds,
         status = status

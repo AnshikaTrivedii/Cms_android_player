@@ -33,13 +33,16 @@ data class HeartbeatRequest(
     val cpu: Int,
     val ram: Int,
     val temp: Int,
-    val currentContent: String? = null
+    val currentContent: String? = null,
+    val deviceHealth: com.orion.player.data.enterprise.DeviceHealthSnapshot? = null,
+    val permissions: com.orion.player.data.enterprise.DevicePermissionSnapshot? = null
 )
 
 data class HeartbeatResponse(
     val status: String,
     val contentRevision: String? = null,
-    val syncRequired: Boolean? = null
+    val syncRequired: Boolean? = null,
+    val commands: List<com.orion.player.data.enterprise.RemoteCommand>? = null
 )
 
 // ── Sync revision (lightweight change detection) ───────────
@@ -60,7 +63,8 @@ data class SyncResponse(
     @SerializedName("assets") val assets: List<AssetInfo>? = null,
     @SerializedName("tickers") val tickers: List<TickerInfo>? = null,
     @SerializedName("currentAssetIds") val currentAssetIds: List<String>? = null,
-    @SerializedName("removedAssetIds") val removedAssetIds: List<String>? = null
+    @SerializedName("removedAssetIds") val removedAssetIds: List<String>? = null,
+    @SerializedName("commands") val commands: List<com.orion.player.data.enterprise.RemoteCommand>? = null
 ) {
     val unchanged: Boolean get() = unchangedRaw ?: false
     fun resolvedAssets(): List<AssetInfo> = assets.orEmpty().filter { it.id.isNotBlank() }
@@ -68,6 +72,10 @@ data class SyncResponse(
     fun resolvedCurrentAssetIds(): Set<String> = currentAssetIds.orEmpty().toSet()
     fun resolvedRemovedAssetIds(): Set<String> = removedAssetIds.orEmpty().toSet()
     val isLayoutMode: Boolean get() = layout != null
+
+    /** Treat inline assets as a fresh manifest even when the server marked the response unchanged. */
+    fun withUpdatedManifest(assets: List<AssetInfo>): SyncResponse =
+        copy(unchangedRaw = false, assets = assets)
 }
 
 data class PlaylistInfo(
@@ -103,6 +111,8 @@ data class AssetInfo(
     val mimeType: String get() = mimeTypeRaw?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
     val durationSeconds: Int get() = durationSecondsRaw?.coerceAtLeast(1) ?: 10
     val position: Int get() = positionRaw ?: 0
+    /** Raw CMS duration; null when the server omitted the field. */
+    val cmsDurationSeconds: Int? get() = durationSecondsRaw
     val fileSize: Int get() = fileSizeRaw ?: 0
     val assetVersion: Int? get() = assetVersionRaw
     val requiresDownload: Boolean get() = requiresDownloadRaw ?: true

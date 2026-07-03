@@ -1,6 +1,8 @@
 package com.orion.player.data.repository
 
 import com.google.gson.Gson
+import android.util.Log
+import com.orion.player.data.playback.inPlaylistOrder
 import com.orion.player.data.local.CachedAssetEntity
 import com.orion.player.data.local.CachedPlaylistEntity
 import com.orion.player.data.local.CachedTickerEntity
@@ -48,6 +50,10 @@ class PlaylistCacheRepository @Inject constructor(
     private val contentRepository: ContentRepository
 ) {
     private val gson: Gson = GsonConfig.create()
+
+    companion object {
+        private const val TAG = "OrionPlayback"
+    }
 
     suspend fun hasCachedContent(): Boolean {
         val cached = playlistCacheDao.getPlaylist() ?: return false
@@ -124,16 +130,27 @@ class PlaylistCacheRepository @Inject constructor(
             }
         }
 
+        val orderedAssets = snapshot.playlistAssets.ifEmpty { snapshot.assets }.inPlaylistOrder()
+        val previousDurations = playlistCacheDao.getAssets().associate { it.assetId to it.durationSeconds }
+
         playlistCacheDao.replaceAll(
             playlist = entity,
-            assets = snapshot.assets.map { asset ->
+            assets = orderedAssets.map { asset ->
                 val localFile = snapshot.localFiles[asset.id]
+                val durationToStore = asset.cmsDurationSeconds ?: asset.durationSeconds
+                previousDurations[asset.id]?.takeIf { it != durationToStore }?.let { oldDuration ->
+                    Log.i(
+                        TAG,
+                        "Cache duration updated: asset=${asset.name} oldSec=$oldDuration " +
+                            "newSec=$durationToStore version=${snapshot.playlistVersion ?: "none"}"
+                    )
+                }
                 CachedAssetEntity(
                     assetId = asset.id,
                     assetName = asset.name,
                     assetType = asset.type,
                     mimeType = asset.mimeType,
-                    durationSeconds = asset.durationSeconds,
+                    durationSeconds = durationToStore,
                     position = asset.position,
                     downloadUrl = asset.downloadUrl,
                     fileSize = asset.fileSize,
@@ -202,7 +219,7 @@ class PlaylistCacheRepository @Inject constructor(
         val cachedAssets = playlistCacheDao.getAssets()
         if (cachedAssets.isEmpty()) return null
 
-        val assets = cachedAssets.map { it.toAssetInfo() }
+        val assets = cachedAssets.map { it.toAssetInfo() }.inPlaylistOrder()
         val localFiles = buildLocalFilesFromCache(cachedAssets)
 
         return when (cachedPlaylist.playbackMode) {

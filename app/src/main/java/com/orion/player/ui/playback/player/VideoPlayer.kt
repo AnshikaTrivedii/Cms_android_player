@@ -17,39 +17,57 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
-import kotlinx.coroutines.delay
 import java.io.File
 
 /**
  * Full-screen video player using Media3 ExoPlayer.
- * Playback is capped at [configuredDurationSeconds] (Option B).
- * Advancement to the next asset is driven by [PlaybackViewModel], not video end.
+ * Slot timing is owned by [com.orion.player.ui.playback.PlaybackViewModel].
  */
 @Composable
 fun VideoPlayer(
     file: File,
-    configuredDurationSeconds: Int,
     playbackSessionKey: String = "",
+    stopToken: Long = 0L,
     onPlaybackStarted: () -> Unit,
+    onPlaybackEnded: () -> Unit = {},
+    onRendererPulse: () -> Unit = {},
     onError: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val configuredDurationMs = configuredDurationSeconds.coerceAtLeast(1) * 1000L
 
     val exoPlayer = remember(file.absolutePath, playbackSessionKey) {
-        var playbackStarted = false
+        var readySignaled = false
+        var endedSignaled = false
         ExoPlayer.Builder(context).build().apply {
             val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
             setMediaItem(mediaItem)
             playWhenReady = true
             repeatMode = Player.REPEAT_MODE_OFF
+            videoScalingMode = androidx.media3.common.C.VIDEO_SCALING_MODE_SCALE_TO_FIT
 
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_READY && !playbackStarted) {
-                        playbackStarted = true
-                        onPlaybackStarted()
+                    when (playbackState) {
+                        Player.STATE_READY -> {
+                            if (!readySignaled) {
+                                readySignaled = true
+                                onPlaybackStarted()
+                            }
+                            onRendererPulse()
+                        }
+                        Player.STATE_ENDED -> {
+                            if (!endedSignaled) {
+                                endedSignaled = true
+                                onPlaybackEnded()
+                            }
+                        }
+                    }
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) {
+                        onRendererPulse()
                     }
                 }
 
@@ -62,14 +80,16 @@ fun VideoPlayer(
         }
     }
 
-    LaunchedEffect(file.absolutePath, configuredDurationMs, playbackSessionKey) {
-        delay(configuredDurationMs)
-        exoPlayer.pause()
-        exoPlayer.stop()
+    LaunchedEffect(stopToken) {
+        if (stopToken > 0L && exoPlayer.isPlaying) {
+            exoPlayer.pause()
+        }
     }
 
-    DisposableEffect(exoPlayer) {
+    DisposableEffect(file.absolutePath, playbackSessionKey) {
         onDispose {
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
             exoPlayer.release()
         }
     }
@@ -86,10 +106,16 @@ fun VideoPlayer(
                     useController = false
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                    setKeepContentOnPlayerReset(true)
                 }
             },
             update = { playerView ->
-                playerView.player = exoPlayer
+                if (playerView.player !== exoPlayer) {
+                    playerView.player = exoPlayer
+                }
+            },
+            onRelease = { playerView ->
+                playerView.player = null
             },
             modifier = Modifier.fillMaxSize()
         )

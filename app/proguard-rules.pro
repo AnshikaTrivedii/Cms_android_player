@@ -10,6 +10,7 @@
 
 # Gson
 -keep class com.orion.player.data.remote.** { *; }
+-keep class com.orion.player.data.enterprise.** { *; }
 -keep class com.orion.player.data.ticker.** { *; }
 -keepclassmembers class com.orion.player.data.remote.** { *; }
 -keepclassmembers class com.orion.player.data.ticker.** { *; }

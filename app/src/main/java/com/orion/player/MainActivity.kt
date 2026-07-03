@@ -1,5 +1,6 @@
 package com.orion.player
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.view.WindowInsets
@@ -10,6 +11,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
 import com.orion.player.data.local.SecurePrefs
+import com.orion.player.data.recovery.OrionRecoveryLogger
+import com.orion.player.data.recovery.PlayerHealthMonitor
+import com.orion.player.data.recovery.PlayerLaunchHelper
+import com.orion.player.service.PlayerForegroundService
 import com.orion.player.ui.navigation.OrionNavGraph
 import com.orion.player.ui.navigation.Routes
 import com.orion.player.ui.theme.OrionPlayerTheme
@@ -18,31 +23,31 @@ import javax.inject.Inject
 
 /**
  * Single Activity host for the Orion Player.
- * Configures immersive fullscreen, keeps screen on, and hosts the Compose NavGraph.
+ * Configures immersive fullscreen, optional kiosk lock-task, and hosts the Compose NavGraph.
  */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var securePrefs: SecurePrefs
+    @Inject lateinit var healthMonitor: PlayerHealthMonitor
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Clear stale paired flag left from older builds without a valid token
+        val launchSource = intent?.getStringExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE)
+            ?: "activity.onCreate"
+        OrionRecoveryLogger.logPlayerStarted(launchSource)
+
         if (securePrefs.isPaired && securePrefs.deviceToken.isNullOrBlank()) {
             securePrefs.clearCredentials()
         }
 
-        // Keep screen on at all times (digital signage requirement)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-        // Edge-to-edge immersive mode
         enableEdgeToEdge()
         setupImmersiveMode()
+        PlayerForegroundService.start(this)
 
-        val startDestination = if (
-            securePrefs.isPaired && !securePrefs.deviceToken.isNullOrBlank()
-        ) {
+        val startDestination = if (securePrefs.isAuthenticated()) {
             Routes.PLAYBACK
         } else {
             Routes.PAIRING
@@ -55,14 +60,60 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        healthMonitor.recordActivityResumed()
+    }
+
+    override fun onStop() {
+        healthMonitor.recordActivityPaused()
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         setupImmersiveMode()
+        applyKioskModeIfEnabled()
     }
 
-    /**
-     * Hides system bars (status bar + navigation bar) for true kiosk experience.
-     */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (securePrefs.kioskModeEnabled && securePrefs.isAuthenticated()) {
+            bringPlayerToForeground("kiosk.home")
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE)?.let { source ->
+            OrionRecoveryLogger.logPlayerStarted(source)
+        }
+    }
+
+    private fun applyKioskModeIfEnabled() {
+        if (!securePrefs.kioskModeEnabled) return
+        OrionRecoveryLogger.logKioskModeEnabled(true)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                startLockTask()
+            }
+        } catch (_: IllegalStateException) {
+            // Lock task requires device owner or screen pinning approval on some devices.
+        } catch (_: SecurityException) {
+            // HOME launcher category still keeps the player as the default shell.
+        }
+    }
+
+    private fun bringPlayerToForeground(source: String) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE, source)
+        }
+        startActivity(intent)
+    }
+
     private fun setupImmersiveMode() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
@@ -81,7 +132,7 @@ class MainActivity : ComponentActivity() {
                     or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                     or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                     or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-            )
+                )
         }
     }
 }

@@ -50,4 +50,10 @@ interface OrionPlayerApi {
         @Header("Authorization") token: String,
         @Body body: PopLogsRequest
     ): PopLogsResponse
+
+    @POST("player/device-logs")
+    suspend fun uploadDeviceLogs(
+        @Header("Authorization") token: String,
+        @Body body: com.orion.player.data.enterprise.DeviceLogsUploadRequest
+    ): com.orion.player.data.enterprise.DeviceLogsUploadResponse
 }
