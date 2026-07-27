@@ -15,9 +15,11 @@ import com.orion.player.data.remote.ZoneSnapshot
 import com.orion.player.data.remote.ZoneType
 import com.orion.player.data.remote.toZoneSnapshots
 import com.orion.player.data.remote.collectLayoutAssets
+import com.orion.player.data.analytics.PopConfigManager
 import com.orion.player.data.enterprise.DeviceLogCollector
 import com.orion.player.data.enterprise.DeviceMetadataCollector
 import com.orion.player.data.enterprise.RemoteCommandExecutor
+import com.orion.player.data.repository.CacheReportRepository
 import com.orion.player.data.repository.ContentRepository
 import com.orion.player.data.repository.ContentCacheRepository
 import com.orion.player.data.repository.PlaylistCacheRepository
@@ -25,6 +27,12 @@ import com.orion.player.data.ticker.TickerDisplayConfig
 import com.orion.player.data.ticker.TickerLogger
 import com.orion.player.data.ticker.resolveActiveTickers
 import com.orion.player.util.NetworkDiagnostics
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import retrofit2.HttpException
@@ -78,18 +86,35 @@ class ContentSyncCoordinator @Inject constructor(
     private val contentRepository: ContentRepository,
     private val playlistCacheRepository: PlaylistCacheRepository,
     private val contentCacheRepository: ContentCacheRepository,
+    private val cacheReportRepository: CacheReportRepository,
     private val securePrefs: SecurePrefs,
     private val remoteCommandExecutor: RemoteCommandExecutor,
     private val deviceLogCollector: DeviceLogCollector,
-    private val deviceMetadataCollector: DeviceMetadataCollector
+    private val deviceMetadataCollector: DeviceMetadataCollector,
+    private val popConfigManager: PopConfigManager,
+    private val syncIntervalConfig: SyncIntervalConfig,
+    private val revisionPollIntervalConfig: RevisionPollIntervalConfig,
+    private val syncStateStore: SyncStateStore,
+    private val initialSyncCoordinator: InitialSyncCoordinator
 ) {
     companion object {
         private const val TAG = "OrionSync"
     }
 
-    private var lastKnownRevision: String? = null
+    private var lastKnownRevision: String? = syncStateStore.lastStoredRevision
     private var lastSyncAttemptMs: Long = 0L
     private val syncMutex = Mutex()
+    private val retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var retrySyncJob: Job? = null
+    private var retrySyncHandler: (suspend () -> Unit)? = null
+
+    fun registerRetrySyncHandler(handler: suspend () -> Unit) {
+        retrySyncHandler = handler
+    }
+
+    fun unregisterRetrySyncHandler() {
+        retrySyncHandler = null
+    }
 
     var revisionEndpointAvailable: Boolean? = null
         private set
@@ -116,35 +141,71 @@ class ContentSyncCoordinator @Inject constructor(
         playlistCacheRepository.hasCachedContent()
 
     suspend fun checkRevisionChanged(): RevisionCheckResult {
-        if (securePrefs.getBearerToken() == null) return RevisionCheckResult.Unpaired
+        val outcome = evaluateRevisionPoll()
+        return when {
+            outcome.reason == "unpaired" -> RevisionCheckResult.Unpaired
+            outcome.reason == "unavailable" -> RevisionCheckResult.Unavailable
+            outcome.shouldSync -> RevisionCheckResult.Changed
+            else -> RevisionCheckResult.Unchanged
+        }
+    }
+
+    suspend fun evaluateRevisionPoll(): RevisionPollOutcome {
+        if (securePrefs.getBearerToken() == null) {
+            return RevisionPollOutcome(shouldSync = false, reason = "unpaired")
+        }
 
         return try {
             val response = contentRepository.getSyncRevision()
             revisionEndpointAvailable = true
+            revisionPollIntervalConfig.updateInterval(response.revisionPollIntervalSeconds)
+            syncIntervalConfig.updateInterval(response.syncIntervalSeconds)
 
-            if (lastKnownRevision == null) {
-                lastKnownRevision = response.revision
-                    ?: playlistCacheRepository.getContentRevision()
-                return RevisionCheckResult.Unchanged
-            }
+            Log.i(
+                TAG,
+                "revision_poll revision=${response.revision} syncRequired=${response.syncRequired} " +
+                    "playlistId=${response.playlistId.orEmpty()} layoutId=${response.layoutId.orEmpty()} " +
+                    "initialSyncPending=${response.initialSyncPending}"
+            )
 
-            if (response.revision != lastKnownRevision) {
-                lastKnownRevision = response.revision
-                RevisionCheckResult.Changed
-            } else {
-                RevisionCheckResult.Unchanged
+            syncStateStore.seedIfEmpty(
+                revision = response.revision,
+                playlistId = response.playlistId,
+                layoutId = response.layoutId
+            )
+
+            val storedRevision = syncStateStore.lastStoredRevision
+            val storedPlaylistId = syncStateStore.lastStoredPlaylistId
+            val storedLayoutId = syncStateStore.lastStoredLayoutId
+
+            when {
+                response.syncRequired ->
+                    RevisionPollOutcome(shouldSync = true, reason = "syncRequired")
+                response.initialSyncPending ->
+                    RevisionPollOutcome(shouldSync = true, reason = "initialSyncPending")
+                !storedRevision.isNullOrBlank() && response.revision != storedRevision ->
+                    RevisionPollOutcome(shouldSync = true, reason = "revision.changed")
+                !response.playlistId.isNullOrBlank() &&
+                    !storedPlaylistId.isNullOrBlank() &&
+                    response.playlistId != storedPlaylistId ->
+                    RevisionPollOutcome(shouldSync = true, reason = "playlist.reassigned")
+                !response.layoutId.isNullOrBlank() &&
+                    !storedLayoutId.isNullOrBlank() &&
+                    response.layoutId != storedLayoutId ->
+                    RevisionPollOutcome(shouldSync = true, reason = "layout.reassigned")
+                else -> RevisionPollOutcome(shouldSync = false)
             }
         } catch (e: HttpException) {
             when (e.code()) {
-                401 -> RevisionCheckResult.Unpaired
+                401 -> RevisionPollOutcome(shouldSync = false, reason = "unpaired")
                 404 -> {
                     revisionEndpointAvailable = false
-                    RevisionCheckResult.Unavailable
+                    RevisionPollOutcome(shouldSync = false, reason = "unavailable")
                 }
-                else -> RevisionCheckResult.Unchanged
+                else -> RevisionPollOutcome(shouldSync = false)
             }
-        } catch (e: Exception) {
-            RevisionCheckResult.Unchanged
+        } catch (_: Exception) {
+            RevisionPollOutcome(shouldSync = false)
         }
     }
 
@@ -156,8 +217,8 @@ class ContentSyncCoordinator @Inject constructor(
 
     fun consumeRevisionIfChanged(revision: String?): Boolean {
         if (revision.isNullOrBlank()) return false
-        if (revision == lastKnownRevision) return false
-        lastKnownRevision = revision
+        val stored = syncStateStore.lastStoredRevision
+        if (revision == stored || revision == lastKnownRevision) return false
         return true
     }
 
@@ -178,24 +239,49 @@ class ContentSyncCoordinator @Inject constructor(
         try {
             val versions = playlistCacheRepository.getSyncVersions()
             val cachedSnapshot = current ?: playlistCacheRepository.loadSnapshot()
+            val missingAssetIds = buildMissingAssetIds(cachedSnapshot)
+            val recoverCache = missingAssetIds.isNotEmpty()
             val (knownIds, assetVersions) = if (force) {
                 null to null
             } else {
                 buildIncrementalSyncHints(cachedSnapshot)
             }
+            val (playlistVersion, layoutVersion) = if (force) {
+                null to null
+            } else {
+                versions.playlistVersion to versions.layoutVersion
+            }
+            Log.i(
+                TAG,
+                "sync_start playlistVersion=${playlistVersion ?: "none"} layoutVersion=${layoutVersion ?: "none"} " +
+                    "knownAssets=${knownIds?.size ?: 0} recoverCache=$recoverCache missing=${missingAssetIds.size}"
+            )
             var syncResponse = contentRepository.syncPlaylist(
-                playlistVersion = versions.playlistVersion,
-                layoutVersion = null,
+                playlistVersion = playlistVersion,
+                layoutVersion = layoutVersion,
                 knownAssetIds = knownIds,
-                assetVersions = assetVersions
+                assetVersions = assetVersions,
+                recoverCache = recoverCache,
+                missingAssetIds = missingAssetIds.takeIf { it.isNotEmpty() }
             ) ?: return SyncOutcome.Unpaired
+
+            detectReassignment(cachedSnapshot, syncResponse)
+            executeCacheCommand(syncResponse.cacheCommand)
 
             if (syncResponse.isLayoutMode && !PlayerPlaybackConfig.LAYOUT_PLAYBACK_ENABLED) {
                 Log.i(TAG, "Ignoring layout payload from sync (layout playback disabled)")
             }
 
             SyncDiagnostics.logSyncResponse(securePrefs, syncResponse)
-            updateRevisionFromSync(syncResponse)
+            Log.i(
+                TAG,
+                "sync_response unchanged=${syncResponse.unchanged} pendingDownloadCount=${syncResponse.pendingDownloadCount ?: 0} " +
+                    "removed=${syncResponse.resolvedRemovedAssetIds().size}"
+            )
+            popConfigManager.update(syncResponse.popLogsExpected, syncResponse.features)
+            syncIntervalConfig.updateInterval(syncResponse.syncIntervalSeconds)
+            revisionPollIntervalConfig.updateInterval(syncResponse.revisionPollIntervalSeconds)
+            initialSyncCoordinator.handleSyncResponse(syncResponse)
 
             PlaylistRefreshLogger.logVersionCheck(
                 localVersion = versions.playlistVersion,
@@ -331,7 +417,15 @@ class ContentSyncCoordinator @Inject constructor(
         }
 
         snapshot?.let { repairMissingLocalFiles(it) }?.let { repaired ->
-            playlistCacheRepository.saveSnapshot(repaired, lastKnownRevision)
+            if (snapshotNeedsLocalFiles(repaired)) {
+                scheduleRetrySync(10)
+                return SyncOutcome.Failed(
+                    message = "Repair incomplete — assets still missing",
+                    keepPlaying = snapshotIsPlayable(current ?: repaired)
+                )
+            }
+            playlistCacheRepository.saveSnapshot(repaired, syncResponse.contentRevision)
+            commitSyncState(syncResponse, repaired)
             SyncDiagnostics.logOutcome("Updated", "repaired missing files after unchanged sync")
             return SyncOutcome.Updated(repaired, structureChanged = false)
         }
@@ -340,13 +434,75 @@ class ContentSyncCoordinator @Inject constructor(
         return null
     }
 
-    private suspend fun fetchFullManifest(): SyncResponse? =
-        contentRepository.syncPlaylist(
+    private suspend fun fetchFullManifest(): SyncResponse? {
+        val snapshot = playlistCacheRepository.loadSnapshot()
+        val missingAssetIds = buildMissingAssetIds(snapshot)
+        return contentRepository.syncPlaylist(
             playlistVersion = null,
             layoutVersion = null,
             knownAssetIds = null,
-            assetVersions = null
+            assetVersions = null,
+            recoverCache = missingAssetIds.isNotEmpty(),
+            missingAssetIds = missingAssetIds.takeIf { it.isNotEmpty() }
         )
+    }
+
+    private fun buildMissingAssetIds(snapshot: PlaybackSnapshot?): List<String> {
+        if (snapshot == null) return emptyList()
+        val required = snapshot.playlistAssets.ifEmpty { snapshot.assets }
+        return required.filter { asset ->
+            asset.assetTypeRequiresDownload() && !asset.isPlayable(snapshot.localFiles)
+        }.map { it.id }
+    }
+
+    private fun detectReassignment(current: PlaybackSnapshot?, syncResponse: SyncResponse) {
+        val newPlaylistId = syncResponse.playlist?.id
+        val newLayoutId = syncResponse.layout?.id
+        val oldPlaylistId = syncStateStore.lastStoredPlaylistId ?: current?.playlistInfo?.id
+        val oldLayoutId = syncStateStore.lastStoredLayoutId ?: current?.layout?.id
+        if (!newPlaylistId.isNullOrBlank() && !oldPlaylistId.isNullOrBlank() && newPlaylistId != oldPlaylistId) {
+            Log.i(TAG, "playlist_reassigned old=$oldPlaylistId new=$newPlaylistId")
+        }
+        if (!newLayoutId.isNullOrBlank() && !oldLayoutId.isNullOrBlank() && newLayoutId != oldLayoutId) {
+            Log.i(TAG, "layout_reassigned old=$oldLayoutId new=$newLayoutId")
+        }
+    }
+
+    private suspend fun executeCacheCommand(command: com.orion.player.data.remote.CacheCommandInfo?) {
+        if (command == null) return
+        Log.i(TAG, "command_execute ${command.command} cmdId=${command.id.orEmpty()}")
+        when (command.command.uppercase().replace('-', '_')) {
+            "FORCE_SYNC" -> Unit
+            "CLEAR_CACHE" -> contentRepository.clearAllCacheFiles()
+            "REDOWNLOAD_PLAYLIST" -> contentRepository.clearAllCacheFiles()
+        }
+    }
+
+    private fun scheduleRetrySync(delaySeconds: Long) {
+        val handler = retrySyncHandler ?: return
+        retrySyncJob?.cancel()
+        retrySyncJob = retryScope.launch {
+            delay(delaySeconds * 1000L)
+            handler()
+        }
+    }
+
+    private suspend fun commitSyncState(syncResponse: SyncResponse, snapshot: PlaybackSnapshot) {
+        val revision = syncResponse.contentRevision
+            ?: syncStateStore.lastStoredRevision
+            ?: lastKnownRevision
+        syncStateStore.commit(
+            revision = revision,
+            playlistId = snapshot.playlistInfo?.id,
+            layoutId = snapshot.layout?.id
+        )
+        lastKnownRevision = revision
+        Log.i(
+            TAG,
+            "sync_complete playlistVersion=${snapshot.playlistVersion} assets=${snapshot.playlistAssets.size} " +
+                "revision=${revision.orEmpty()}"
+        )
+    }
 
     private suspend fun dispatchSyncResponse(
         syncResponse: SyncResponse,
@@ -470,6 +626,32 @@ class ContentSyncCoordinator @Inject constructor(
         }
 
         if (!assetsChanged && !playlistChanged && !versionChanged && !diff.requiresDownload && current != null) {
+            val allCached = newAssets
+                .filter { it.assetTypeRequiresDownload() }
+                .all { it.isPlayable(current.localFiles) || contentRepository.isAssetCached(it) }
+            if (!allCached) {
+                return finalizeSync(
+                    syncResponse = syncResponse,
+                    current = current,
+                    newAssets = newAssets,
+                    snapshotBuilder = { mergedFiles, nextIndex ->
+                        PlaybackSnapshot(
+                            mode = PlaybackMode.FULL_SCREEN,
+                            assets = newAssets,
+                            localFiles = mergedFiles,
+                            playlistInfo = syncResponse.playlist,
+                            playlistVersion = syncResponse.playlistVersion,
+                            layoutVersion = null,
+                            layout = null,
+                            playlistAssets = newAssets,
+                            currentIndex = nextIndex,
+                            tickers = resolvedTickers
+                        )
+                    },
+                    structureChanged = diff.orderChanged || diff.assetsAdded.isNotEmpty() || diff.assetsRemoved.isNotEmpty(),
+                    onDownloadProgress = onDownloadProgress
+                )
+            }
             val snapshot = current.copy(
                 assets = newAssets,
                 playlistAssets = newAssets,
@@ -477,7 +659,13 @@ class ContentSyncCoordinator @Inject constructor(
                 playlistInfo = syncResponse.playlist ?: current.playlistInfo,
                 playlistVersion = syncResponse.playlistVersion
             )
-            playlistCacheRepository.saveSnapshot(snapshot, lastKnownRevision)
+            playlistCacheRepository.saveSnapshot(snapshot, syncResponse.contentRevision)
+            commitSyncState(syncResponse, snapshot)
+            cacheReportRepository.reportSuccessfulSync(
+                syncResponse = syncResponse,
+                snapshot = snapshot,
+                completedCommandId = syncResponse.cacheCommand?.id
+            )
             PlaylistRefreshLogger.logCacheUpdated(
                 playlistName = snapshot.playlistInfo?.name.orEmpty(),
                 version = snapshot.playlistVersion
@@ -579,8 +767,11 @@ class ContentSyncCoordinator @Inject constructor(
 
         if (!force && current != null && !assetsChanged && !layoutChanged) {
             repairMissingLocalFiles(current)?.let { repaired ->
-                playlistCacheRepository.saveSnapshot(repaired, lastKnownRevision)
-                return SyncOutcome.Updated(repaired, structureChanged = false)
+                if (!snapshotNeedsLocalFiles(repaired)) {
+                    playlistCacheRepository.saveSnapshot(repaired, syncResponse.contentRevision)
+                    commitSyncState(syncResponse, repaired)
+                    return SyncOutcome.Updated(repaired, structureChanged = false)
+                }
             }
             if (layoutHasPlayableContent(zones, current.localFiles)) {
                 return SyncOutcome.Unchanged
@@ -625,7 +816,9 @@ class ContentSyncCoordinator @Inject constructor(
         }
     ): SyncOutcome {
         val toDownload = newAssets.filter { asset ->
-            assetNeedsDownload(asset, current, mergedFilesBeforeDownload(current, newAssets))
+            asset.requiresDownload &&
+                asset.available &&
+                assetNeedsDownload(asset, current, mergedFilesBeforeDownload(current, newAssets))
         }
         onDownloadProgress?.invoke(0, toDownload.size.coerceAtLeast(1))
         val newFiles = contentRepository.downloadAllAssets(toDownload) { completed, total ->
@@ -637,11 +830,36 @@ class ContentSyncCoordinator @Inject constructor(
         val mergedFiles = buildLocalFileMap(newAssets, newFiles, current)
         SyncDiagnostics.logPlayabilityCheck(newAssets, mergedFiles)
 
+        val pendingCount = newAssets.count { asset ->
+            asset.assetTypeRequiresDownload() &&
+                asset.requiresDownload &&
+                asset.available &&
+                !asset.isPlayable(mergedFiles)
+        }
+        if (pendingCount > 0) {
+            Log.w(TAG, "Sync incomplete: $pendingCount assets still pending")
+            cacheReportRepository.reportPartialSync(
+                syncResponse = syncResponse,
+                pendingDownloadCount = pendingCount,
+                error = "downloads_pending"
+            )
+            scheduleRetrySync(10)
+            return fallbackOrFail(
+                current = current,
+                message = "Sync incomplete: $pendingCount assets still pending"
+            )
+        }
+
         if (!requirePlayable(mergedFiles)) {
             val failedDetails = newAssets
                 .filterNot { it.isPlayable(mergedFiles) }
                 .joinToString { "${it.name}(${it.type})" }
             Log.e(TAG, "No playable content after sync. Failed: $failedDetails")
+            cacheReportRepository.reportPartialSync(
+                syncResponse = syncResponse,
+                pendingDownloadCount = pendingCount,
+                error = failedDetails
+            )
             return fallbackOrFail(
                 current = current,
                 message = "Failed to download content: $failedDetails"
@@ -651,6 +869,12 @@ class ContentSyncCoordinator @Inject constructor(
         val keepKeys = syncResponse.resolvedCurrentAssetIds()
             .ifEmpty { newAssets.map { it.id }.toSet() }
         contentRepository.cleanupStaleCache(keepKeys)
+        for (removedId in syncResponse.resolvedRemovedAssetIds()) {
+            if (removedId !in keepKeys) {
+                contentRepository.cleanupStaleCache(keepKeys)
+                break
+            }
+        }
 
         val nextIndex = when {
             current == null -> 0
@@ -659,7 +883,13 @@ class ContentSyncCoordinator @Inject constructor(
         }
 
         val snapshot = snapshotBuilder(mergedFiles, nextIndex)
-        playlistCacheRepository.saveSnapshot(snapshot, lastKnownRevision)
+        playlistCacheRepository.saveSnapshot(snapshot, syncResponse.contentRevision)
+        commitSyncState(syncResponse, snapshot)
+        cacheReportRepository.reportSuccessfulSync(
+            syncResponse = syncResponse,
+            snapshot = snapshot,
+            completedCommandId = syncResponse.cacheCommand?.id
+        )
         contentCacheRepository.logCacheSummary()
         PlaylistRefreshLogger.logCacheUpdated(
             playlistName = snapshot.playlistInfo?.name.orEmpty(),
@@ -670,6 +900,10 @@ class ContentSyncCoordinator @Inject constructor(
             assetCount = newAssets.size,
             resetIndex = structureChanged,
             newVersion = snapshot.playlistVersion
+        )
+        Log.i(
+            TAG,
+            "playback_switch playlist=\"${snapshot.playlistInfo?.name.orEmpty()}\" assets=${newAssets.size}"
         )
         SyncDiagnostics.logOutcome("Updated", "playable=${mergedFiles.size} assets mode=${snapshot.mode}")
         return SyncOutcome.Updated(snapshot = snapshot, structureChanged = structureChanged)
@@ -782,17 +1016,6 @@ class ContentSyncCoordinator @Inject constructor(
             if (file != null && file.exists() && file.length() > 0L) {
                 put(asset.id, file)
             }
-        }
-    }
-
-    private suspend fun updateRevisionFromSync(@Suppress("UNUSED_PARAMETER") syncResponse: SyncResponse) {
-        if (revisionEndpointAvailable == false) return
-        try {
-            val revision = contentRepository.getSyncRevision().revision
-            lastKnownRevision = revision
-            revisionEndpointAvailable = true
-        } catch (_: HttpException) {
-        } catch (_: Exception) {
         }
     }
 

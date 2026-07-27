@@ -1,21 +1,35 @@
 package com.orion.player.data.repository
 
 import android.util.Log
+import com.google.gson.Gson
 import com.orion.player.BuildConfig
+import com.orion.player.data.analytics.PopConfigManager
 import com.orion.player.data.analytics.PopLogRecord
 import com.orion.player.data.analytics.PopTelemetryLogger
 import com.orion.player.data.enterprise.CrashLogStore
 import com.orion.player.data.enterprise.DeviceLogsUploadRequest
 import com.orion.player.data.enterprise.DeviceLogCollector
+import com.orion.player.data.enterprise.RemoteCommand
 import com.orion.player.data.local.HeartbeatQueueDao
 import com.orion.player.data.local.PopLogDao
 import com.orion.player.data.local.QueuedHeartbeatEntity
 import com.orion.player.data.local.SecurePrefs
+import com.orion.player.data.remote.GsonConfig
 import com.orion.player.data.remote.HeartbeatRequest
 import com.orion.player.data.remote.HeartbeatResponse
+import com.orion.player.data.remote.PendingRemoteCommand
+import com.orion.player.data.remote.DeviceReportRequest
+import com.orion.player.data.remote.DeviceReportResponse
+import com.orion.player.data.remote.SystemLogEntry
+import com.orion.player.data.remote.SystemLogsRequest
 import com.orion.player.data.remote.OrionPlayerApi
+import com.orion.player.data.remote.PlayerFeatures
 import com.orion.player.data.remote.PopLogEntry
 import com.orion.player.data.remote.PopLogsRequest
+import com.orion.player.data.sync.SyncIntervalConfig
+import com.orion.player.data.telemetry.HeartbeatPayloadBuilder
+import com.orion.player.data.telemetry.HeartbeatPayloadNormalizer
+import com.orion.player.data.telemetry.HeartbeatTelemetryLogger
 import com.orion.player.util.SessionGuard
 import retrofit2.HttpException
 import javax.inject.Inject
@@ -33,26 +47,108 @@ class TelemetryRepository @Inject constructor(
     private val securePrefs: SecurePrefs,
     private val sessionGuard: SessionGuard,
     private val deviceLogCollector: DeviceLogCollector,
-    private val crashLogStore: CrashLogStore
+    private val crashLogStore: CrashLogStore,
+    private val popConfigManager: PopConfigManager,
+    private val syncIntervalConfig: SyncIntervalConfig,
+    private val heartbeatPayloadBuilder: HeartbeatPayloadBuilder
 ) {
     companion object {
         private const val TAG = "OrionTelemetry"
         private const val FLUSH_BATCH_SIZE = 50
+        private const val MAX_HEARTBEAT_ATTEMPTS = 3
+        private const val POP_DISABLED_REASON = "proof_of_play_disabled"
+        private val gson: Gson = GsonConfig.create()
+    }
+
+    fun applyServerPopConfig(popLogsExpected: Boolean?, features: PlayerFeatures?) {
+        popConfigManager.update(popLogsExpected, features)
     }
 
     suspend fun sendHeartbeat(body: HeartbeatRequest): HeartbeatResponse? {
         if (!sessionGuard.isPairedWithToken()) return null
         val token = sessionGuard.requirePairedToken()
-        return try {
-            val response = api.sendHeartbeat(token = token, body = body)
-            flushQueuedHeartbeats()
-            uploadPendingCrashLog()
-            response
-        } catch (e: Exception) {
-            Log.w(TAG, "Heartbeat failed, queuing locally: ${e.message}")
-            queueHeartbeat(body)
-            null
+        val deviceId = securePrefs.getOrCreateHardwareId()
+        val normalized = HeartbeatPayloadNormalizer.normalize(body)
+        val url = HeartbeatPayloadNormalizer.endpointUrl()
+
+        var lastError: String? = null
+        var lastCode: Int? = null
+        var lastBody: String? = null
+
+        attemptLoop@ for (attempt in 0 until MAX_HEARTBEAT_ATTEMPTS) {
+            val attemptNumber = attempt + 1
+            val started = System.currentTimeMillis()
+            HeartbeatTelemetryLogger.logAttempt(deviceId, attemptNumber, url, normalized)
+            try {
+                val response = api.sendHeartbeat(token = token, body = normalized)
+                val mapped = mapHeartbeatResponse(response)
+                applyServerPopConfig(mapped.popLogsExpected, mapped.features)
+                syncIntervalConfig.updateInterval(mapped.syncIntervalSeconds)
+                mapped.initialSyncTimeoutSeconds?.let {
+                    securePrefs.initialSyncTimeoutSeconds = it.coerceIn(
+                        SyncIntervalConfig.MIN_SECONDS,
+                        SyncIntervalConfig.MAX_SECONDS
+                    )
+                }
+                val elapsed = System.currentTimeMillis() - started
+                HeartbeatTelemetryLogger.logSuccess(
+                    deviceId = deviceId,
+                    attempt = attemptNumber,
+                    responseCode = 200,
+                    responseBody = gson.toJson(mapped),
+                    elapsedMs = elapsed
+                )
+                runCatching { flushQueuedHeartbeats() }
+                    .onFailure { Log.w(TAG, "Heartbeat flush queue failed: ${it.message}") }
+                runCatching { uploadPendingCrashLog() }
+                    .onFailure { Log.w(TAG, "Crash log upload failed: ${it.message}") }
+                return mapped
+            } catch (e: HttpException) {
+                lastCode = e.code()
+                lastBody = e.response()?.errorBody()?.string()
+                lastError = "HTTP ${e.code()}: ${lastBody ?: e.message()}"
+                HeartbeatTelemetryLogger.logFailure(
+                    deviceId = deviceId,
+                    attempt = attemptNumber,
+                    responseCode = e.code(),
+                    responseBody = lastBody,
+                    error = lastError,
+                    elapsedMs = System.currentTimeMillis() - started
+                )
+                if (e.code() in 400..499 && e.code() != 408 && e.code() != 429) {
+                    break@attemptLoop
+                }
+            } catch (e: Exception) {
+                lastError = e.message ?: e.javaClass.simpleName
+                HeartbeatTelemetryLogger.logFailure(
+                    deviceId = deviceId,
+                    attempt = attemptNumber,
+                    responseCode = lastCode,
+                    responseBody = lastBody,
+                    error = lastError,
+                    elapsedMs = System.currentTimeMillis() - started
+                )
+            }
         }
+
+        Log.w(TAG, "Heartbeat failed after $MAX_HEARTBEAT_ATTEMPTS attempts: $lastError")
+        queueHeartbeat(normalized)
+        return null
+    }
+
+    private fun mapHeartbeatResponse(response: HeartbeatResponse): HeartbeatResponse {
+        if (!response.commands.isNullOrEmpty()) return response
+        val pending = response.pendingCommand ?: run {
+            val cmd = response.command
+            if (cmd.isNullOrBlank()) return response
+            PendingRemoteCommand(id = response.commandId, command = cmd, params = null)
+        }
+        val command = RemoteCommand(
+            id = pending.id,
+            type = pending.command,
+            params = pending.params
+        )
+        return response.copy(commands = listOf(command))
     }
 
     private suspend fun queueHeartbeat(body: HeartbeatRequest) {
@@ -81,11 +177,14 @@ class TelemetryRepository @Inject constructor(
                 for (heartbeat in batch) {
                     val body = heartbeat.payloadJson
                         ?.let(HeartbeatPayloadCodec::decode)
-                        ?: HeartbeatRequest(
-                            cpu = heartbeat.cpu,
-                            ram = heartbeat.ram,
-                            temp = heartbeat.temp,
-                            currentContent = heartbeat.currentContent
+                        ?.let(HeartbeatPayloadNormalizer::normalize)
+                        ?: HeartbeatPayloadNormalizer.normalize(
+                            HeartbeatRequest(
+                                cpu = heartbeat.cpu,
+                                ram = heartbeat.ram,
+                                temp = heartbeat.temp,
+                                currentContent = heartbeat.currentContent
+                            )
                         )
                     api.sendHeartbeat(token = token, body = body)
                 }
@@ -103,6 +202,10 @@ class TelemetryRepository @Inject constructor(
     }
 
     suspend fun queuePopLog(record: PopLogRecord) {
+        if (!popConfigManager.isPopEnabled()) {
+            PopTelemetryLogger.logSkipped("pop_disabled")
+            return
+        }
         popLogDao.insert(record.toEntity())
         PopTelemetryLogger.logGenerated(record.assetName, record.status)
         val pending = popLogDao.getUnsyncedCount()
@@ -113,12 +216,26 @@ class TelemetryRepository @Inject constructor(
 
     suspend fun flushPopLogs(): Int {
         if (!sessionGuard.isPairedWithToken()) return 0
+        if (!popConfigManager.isPopEnabled()) {
+            PopTelemetryLogger.logSkipped("pop_disabled")
+            return 0
+        }
+
         val token = sessionGuard.requirePairedToken()
+        val hardwareId = securePrefs.getOrCreateHardwareId()
+        val tokenPrefix = securePrefs.deviceTokenPrefix()
         var totalSynced = 0
 
         while (true) {
             val unsynced = popLogDao.getUnsynced(FLUSH_BATCH_SIZE)
             if (unsynced.isEmpty()) break
+
+            PopTelemetryLogger.logSubmitAttempt(
+                hardwareId = hardwareId,
+                tokenPrefix = tokenPrefix,
+                pendingCount = popLogDao.getUnsyncedCount(),
+                batchSize = unsynced.size
+            )
 
             try {
                 val logEntries = unsynced.map { it.toApiEntry() }
@@ -127,11 +244,47 @@ class TelemetryRepository @Inject constructor(
                     body = PopLogsRequest(logs = logEntries)
                 )
 
+                response.popLogsExpected?.let { expected ->
+                    popConfigManager.update(expected, PlayerFeatures(proofOfPlay = expected))
+                }
+
+                if (response.accepted == false && response.reason == POP_DISABLED_REASON) {
+                    popConfigManager.disablePermanently(POP_DISABLED_REASON)
+                    popLogDao.deleteUnsynced()
+                    PopTelemetryLogger.logQueueStatus(0)
+                    Log.w(TAG, "PoP disabled by CMS — cleared ${unsynced.size} queued log(s)")
+                    break
+                }
+
+                if (response.accepted == false) {
+                    PopTelemetryLogger.logUploadFailed(
+                        unsynced.size,
+                        response.reason ?: "CMS accepted=false"
+                    )
+                    Log.w(TAG, "PoP flush rejected: reason=${response.reason}")
+                    break
+                }
+
+                val responseDeviceId = response.deviceId?.trim().orEmpty()
+                if (responseDeviceId.isNotBlank()) {
+                    val storedId = securePrefs.cmsDeviceId
+                    if (storedId.isNullOrBlank()) {
+                        securePrefs.cmsDeviceId = responseDeviceId
+                    } else if (storedId != responseDeviceId) {
+                        PopTelemetryLogger.logDeviceIdMismatch(storedId, responseDeviceId)
+                        Log.e(
+                            TAG,
+                            "PoP deviceId mismatch stored=$storedId response=$responseDeviceId tokenPrefix=$tokenPrefix"
+                        )
+                        break
+                    }
+                }
+
                 val received = response.received.coerceAtLeast(0)
                 if (received <= 0) {
                     PopTelemetryLogger.logUploadFailed(
                         attempted = unsynced.size,
-                        reason = "CMS received=0"
+                        reason = response.reason ?: "CMS received=0"
                     )
                     Log.w(TAG, "PoP flush rejected by CMS: received=0, keeping ${unsynced.size} queued")
                     break
@@ -143,7 +296,16 @@ class TelemetryRepository @Inject constructor(
                 popLogDao.deleteSynced()
                 totalSynced += confirmed.size
                 PopTelemetryLogger.logUploaded(confirmed.size)
-                Log.d(TAG, "Flushed ${confirmed.size} PoP log(s), CMS received=$received")
+                PopTelemetryLogger.logSubmitSuccess(
+                    deviceId = response.deviceId,
+                    deviceName = response.deviceName,
+                    received = received,
+                    skipped = response.skipped
+                )
+                Log.d(
+                    TAG,
+                    "Flushed ${confirmed.size} PoP log(s) deviceId=${response.deviceId} CMS received=$received"
+                )
 
                 if (received < unsynced.size) {
                     Log.w(
@@ -155,7 +317,7 @@ class TelemetryRepository @Inject constructor(
             } catch (e: HttpException) {
                 val errorBody = e.response()?.errorBody()?.string()
                 PopTelemetryLogger.logUploadFailed(unsynced.size, "HTTP ${e.code()}")
-                Log.e(TAG, "PoP flush failed: HTTP ${e.code()} $errorBody", e)
+                Log.e(TAG, "PoP flush failed: HTTP ${e.code()} body=$errorBody", e)
                 break
             } catch (e: Exception) {
                 PopTelemetryLogger.logUploadFailed(unsynced.size, e.message ?: "unknown")
@@ -211,6 +373,93 @@ class TelemetryRepository @Inject constructor(
     }
 
     suspend fun getUnsyncedPopCount(): Int = popLogDao.getUnsyncedCount()
+
+    suspend fun submitDeviceReport(
+        completedCommandId: String? = null,
+        commandFailed: Boolean = false,
+        commandError: String? = null
+    ): DeviceReportResponse? {
+        if (!sessionGuard.isPairedWithToken()) return null
+        val token = sessionGuard.requirePairedToken()
+        return try {
+            val heartbeat = heartbeatPayloadBuilder.build()
+            val body = DeviceReportRequest(
+                cpu = heartbeat.cpu,
+                ram = heartbeat.ram,
+                temp = heartbeat.temp,
+                currentContent = heartbeat.currentContent,
+                currentAsset = heartbeat.currentAsset,
+                currentPlaylistName = heartbeat.currentPlaylistName,
+                playbackStatus = heartbeat.playbackStatus,
+                playbackUptimeSeconds = heartbeat.playbackUptimeSeconds,
+                ip = heartbeat.ip,
+                macAddress = heartbeat.macAddress,
+                resolution = heartbeat.resolution,
+                orientation = heartbeat.orientation,
+                timezone = heartbeat.timezone,
+                androidVersion = heartbeat.androidVersion,
+                playerVersion = heartbeat.playerVersion,
+                deviceModel = heartbeat.deviceModel,
+                manufacturer = heartbeat.manufacturer,
+                deviceName = heartbeat.deviceName,
+                lastSyncTime = heartbeat.lastSyncTime,
+                storageTotalBytes = heartbeat.storageTotalBytes,
+                storageFreeBytes = heartbeat.storageFreeBytes,
+                networkStatus = heartbeat.networkStatus,
+                permissions = heartbeat.permissions,
+                completedCommandId = completedCommandId,
+                commandFailed = if (commandFailed) true else null,
+                commandError = commandError
+            )
+            val response = api.submitDeviceReport(token = token, body = body)
+            mapDeviceReportResponse(response)
+        } catch (e: HttpException) {
+            val errorBody = e.response()?.errorBody()?.string()
+            Log.e(TAG, "Device report failed: HTTP ${e.code()} $errorBody", e)
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "Device report failed: ${e.message}", e)
+            null
+        }
+    }
+
+    suspend fun submitSystemLogs(
+        category: String,
+        message: String,
+        metadata: Map<String, Any>? = null
+    ): Boolean {
+        if (!sessionGuard.isPairedWithToken()) return false
+        val token = sessionGuard.requirePairedToken()
+        return try {
+            api.submitSystemLogs(
+                token = token,
+                body = SystemLogsRequest(
+                    logs = listOf(
+                        SystemLogEntry(
+                            category = category,
+                            message = message,
+                            metadata = metadata
+                        )
+                    )
+                )
+            )
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "System log upload failed: ${e.message}", e)
+            false
+        }
+    }
+
+    private fun mapDeviceReportResponse(response: DeviceReportResponse): DeviceReportResponse {
+        if (!response.commands.isNullOrEmpty()) return response
+        val pending = response.pendingCommand ?: return response
+        val command = RemoteCommand(
+            id = pending.id,
+            type = pending.command,
+            params = pending.params
+        )
+        return response.copy(commands = listOf(command))
+    }
 
     private fun com.orion.player.data.local.PopLogEntity.toApiEntry(): PopLogEntry {
         val start = startTime

@@ -100,6 +100,10 @@ class PairingRepository @Inject constructor(
                     )
                     securePrefs.pairingSecret = null
                     securePrefs.pairingCode = null
+                    Log.i(
+                        TAG,
+                        "Paired hardwareId=$hardwareId tokenPrefix=${securePrefs.deviceTokenPrefix()} org=${status.organizationId}"
+                    )
                     break
                 }
             } catch (e: Exception) {

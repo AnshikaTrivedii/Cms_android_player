@@ -82,14 +82,51 @@ data class HeartbeatResponse(
     val status: String,
     val contentRevision: String? = null,
     val syncRequired: Boolean? = null,
-    val commands: List<com.orion.player.data.enterprise.RemoteCommand>? = null
+    val commands: List<com.orion.player.data.enterprise.RemoteCommand>? = null,
+    val pendingCommand: PendingRemoteCommand? = null,
+    val command: String? = null,
+    val commandId: String? = null,
+    val popLogsExpected: Boolean? = null,
+    val features: PlayerFeatures? = null,
+    val configVersion: Int? = null,
+    val syncIntervalSeconds: Int? = null,
+    val revisionPollIntervalSeconds: Int? = null,
+    val initialSyncPending: Boolean? = null,
+    val initialSyncTimeoutSeconds: Int? = null
+)
+
+data class PlayerFeatures(
+    val autoSync: Boolean? = null,
+    val offlinePlayback: Boolean? = null,
+    val proofOfPlay: Boolean? = null,
+    val ticker: Boolean? = null,
+    val watchdog: Boolean? = null,
+    val crashRecovery: Boolean? = null,
+    val backgroundSync: Boolean? = null,
+    val autoDownload: Boolean? = null,
+    val remoteLogs: Boolean? = null
+)
+
+data class PendingRemoteCommand(
+    val id: String? = null,
+    val command: String,
+    val params: Map<String, String>? = null
 )
 
 // ── Sync revision (lightweight change detection) ───────────
 
 data class SyncRevisionResponse(
     val revision: String,
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    val syncRequired: Boolean = false,
+    val playlistVersion: Int? = null,
+    val layoutVersion: Int? = null,
+    val contentType: String? = null,
+    val playlistId: String? = null,
+    val layoutId: String? = null,
+    val initialSyncPending: Boolean = false,
+    val revisionPollIntervalSeconds: Int = 5,
+    val syncIntervalSeconds: Int = 120
 )
 
 // ── Sync ───────────────────────────────────────────────────
@@ -104,7 +141,19 @@ data class SyncResponse(
     @SerializedName("tickers") val tickers: List<TickerInfo>? = null,
     @SerializedName("currentAssetIds") val currentAssetIds: List<String>? = null,
     @SerializedName("removedAssetIds") val removedAssetIds: List<String>? = null,
-    @SerializedName("commands") val commands: List<com.orion.player.data.enterprise.RemoteCommand>? = null
+    @SerializedName("commands") val commands: List<com.orion.player.data.enterprise.RemoteCommand>? = null,
+    @SerializedName("popLogsExpected") val popLogsExpected: Boolean? = null,
+    @SerializedName("features") val features: PlayerFeatures? = null,
+    @SerializedName("configVersion") val configVersion: Int? = null,
+    @SerializedName("syncRequired") val syncRequired: Boolean? = null,
+    @SerializedName("pendingDownloadCount") val pendingDownloadCount: Int? = null,
+    @SerializedName("contentRevision") val contentRevision: String? = null,
+    @SerializedName("cacheCommand") val cacheCommand: CacheCommandInfo? = null,
+    @SerializedName("pendingCommand") val pendingCommand: PendingRemoteCommand? = null,
+    @SerializedName("syncIntervalSeconds") val syncIntervalSeconds: Int? = null,
+    @SerializedName("revisionPollIntervalSeconds") val revisionPollIntervalSeconds: Int? = null,
+    @SerializedName("initialSyncPending") val initialSyncPending: Boolean? = null,
+    @SerializedName("initialSyncTimeoutSeconds") val initialSyncTimeoutSeconds: Int? = null
 ) {
     val unchanged: Boolean get() = unchangedRaw ?: false
     fun resolvedAssets(): List<AssetInfo> = assets.orEmpty().filter { it.id.isNotBlank() }
@@ -143,7 +192,10 @@ data class AssetInfo(
     @SerializedName("assetVersion") private val assetVersionRaw: Int? = null,
     @SerializedName("contentHash") val contentHash: String? = null,
     @SerializedName("updatedAt") val updatedAt: String? = null,
-    @SerializedName("requiresDownload") private val requiresDownloadRaw: Boolean? = null
+    @SerializedName("requiresDownload") private val requiresDownloadRaw: Boolean? = null,
+    @SerializedName("available") private val availableRaw: Boolean? = null,
+    @SerializedName("status") val status: String? = null,
+    @SerializedName("unavailableReason") val unavailableReason: String? = null
 ) {
     val id: String get() = idRaw.orEmpty()
     val name: String get() = nameRaw.orEmpty()
@@ -156,6 +208,7 @@ data class AssetInfo(
     val fileSize: Int get() = fileSizeRaw ?: 0
     val assetVersion: Int? get() = assetVersionRaw
     val requiresDownload: Boolean get() = requiresDownloadRaw ?: true
+    val available: Boolean get() = availableRaw ?: true
 
     /** Merge manifest + zone-embedded copies; prefer non-empty download fields from either side. */
     fun mergeWith(other: AssetInfo): AssetInfo {
@@ -174,7 +227,10 @@ data class AssetInfo(
             assetVersionRaw = assetVersionRaw ?: other.assetVersionRaw,
             contentHash = contentHash ?: other.contentHash,
             updatedAt = updatedAt ?: other.updatedAt,
-            requiresDownloadRaw = requiresDownloadRaw ?: other.requiresDownloadRaw
+            requiresDownloadRaw = requiresDownloadRaw ?: other.requiresDownloadRaw,
+            availableRaw = availableRaw ?: other.availableRaw,
+            status = status ?: other.status,
+            unavailableReason = unavailableReason ?: other.unavailableReason
         )
     }
 
@@ -228,5 +284,112 @@ data class PopLogsRequest(
 )
 
 data class PopLogsResponse(
-    val received: Int
+    val received: Int,
+    val skipped: Int? = null,
+    val accepted: Boolean? = null,
+    val deviceId: String? = null,
+    val deviceName: String? = null,
+    val popLogsExpected: Boolean? = null,
+    val reason: String? = null
+)
+
+// ── Cache command & report ─────────────────────────────────
+
+data class CacheCommandInfo(
+    val id: String? = null,
+    val command: String
+)
+
+data class CacheReportAsset(
+    val assetId: String,
+    val assetName: String,
+    val assetType: String,
+    val mimeType: String? = null,
+    val playlistId: String? = null,
+    val playlistName: String? = null,
+    val fileSize: Int? = null,
+    val assetVersion: Int? = null,
+    val contentHash: String? = null,
+    val downloadStatus: String,
+    val localCacheStatus: String,
+    val downloadedAt: String? = null
+)
+
+data class CacheReportRequest(
+    val currentPlaylistId: String? = null,
+    val currentPlaylistName: String? = null,
+    val playlistVersion: Int? = null,
+    val currentLayoutId: String? = null,
+    val currentLayoutName: String? = null,
+    val layoutVersion: Int? = null,
+    val cacheTotalBytes: Long? = null,
+    val cacheUsedBytes: Long? = null,
+    val cachedAssetCount: Int? = null,
+    val expectedAssetCount: Int? = null,
+    val pendingDownloadCount: Int? = null,
+    val syncStatus: String? = null,
+    val lastSuccessfulSyncAt: String? = null,
+    val lastFailedSyncAt: String? = null,
+    val lastSyncError: String? = null,
+    val completedCommandId: String? = null,
+    val commandFailed: Boolean? = null,
+    val commandError: String? = null,
+    val assets: List<CacheReportAsset> = emptyList()
+)
+
+// ── Device report & system logs ─────────────────────────────
+
+data class DeviceReportRequest(
+    val cpu: Int,
+    val ram: Int,
+    val temp: Int,
+    val currentContent: String? = null,
+    val currentAsset: String? = null,
+    val currentPlaylistName: String? = null,
+    val playbackStatus: String? = null,
+    val playbackUptimeSeconds: Long? = null,
+    val ip: String? = null,
+    val macAddress: String? = null,
+    val resolution: String? = null,
+    val orientation: String? = null,
+    val timezone: String? = null,
+    val androidVersion: String? = null,
+    val playerVersion: String? = null,
+    val deviceModel: String? = null,
+    val manufacturer: String? = null,
+    val deviceName: String? = null,
+    val lastSyncTime: String? = null,
+    val storageTotalBytes: Long? = null,
+    val storageFreeBytes: Long? = null,
+    val networkStatus: String? = null,
+    val permissions: DevicePermissionsPayload? = null,
+    val completedCommandId: String? = null,
+    val commandFailed: Boolean? = null,
+    val commandError: String? = null
+)
+
+data class DeviceReportResponse(
+    val received: Boolean? = null,
+    val configVersion: Int? = null,
+    val popLogsExpected: Boolean? = null,
+    val syncIntervalSeconds: Int? = null,
+    val initialSyncPending: Boolean? = null,
+    val initialSyncTimeoutSeconds: Int? = null,
+    val features: PlayerFeatures? = null,
+    val commands: List<com.orion.player.data.enterprise.RemoteCommand>? = null,
+    val pendingCommand: PendingRemoteCommand? = null
+)
+
+data class SystemLogEntry(
+    val category: String,
+    val message: String,
+    val metadata: Map<String, Any>? = null
+)
+
+data class SystemLogsRequest(
+    val logs: List<SystemLogEntry>
+)
+
+data class SystemLogsResponse(
+    val received: Int? = null
 )

@@ -23,25 +23,23 @@ import com.orion.player.data.remote.AssetType.deferPopStartUntilReady
 import com.orion.player.data.remote.AssetType.isPlayable
 import com.orion.player.data.remote.AssetType.normalizedType
 import com.orion.player.data.remote.AssetType.playlistManifestChangedFrom
-import com.orion.player.data.enterprise.DeviceMetadataCollector
-import com.orion.player.data.enterprise.DeviceHealthReporter
 import com.orion.player.data.enterprise.DeviceLogCollector
-import com.orion.player.data.enterprise.DevicePermissionReporter
 import com.orion.player.data.enterprise.RemoteCommandExecutor
-import com.orion.player.data.remote.HeartbeatRequest
+import com.orion.player.data.remote.HeartbeatResponse
 import com.orion.player.data.repository.TelemetryRepository
-import com.orion.player.data.stability.StabilityMonitor
+import com.orion.player.data.telemetry.DeviceHeartbeatScheduler
 import com.orion.player.data.sync.ContentSyncCoordinator
+import com.orion.player.data.sync.ContentSyncScheduler
+import com.orion.player.data.sync.InitialSyncCoordinator
+import com.orion.player.data.sync.PostPairingBootstrap
 import com.orion.player.data.sync.PlaybackMode
 import com.orion.player.data.sync.PlaybackSnapshot
 import com.orion.player.data.sync.PlaylistRefreshLogger
 import com.orion.player.data.sync.PlayerEventStreamClient
-import com.orion.player.data.sync.RevisionCheckResult
-import com.orion.player.data.sync.SyncConfig
+import com.orion.player.data.sync.RevisionPollScheduler
 import com.orion.player.data.sync.SyncDiagnostics
 import com.orion.player.data.sync.SyncOutcome
 import com.orion.player.data.ticker.TickerDisplayConfig
-import com.orion.player.util.DeviceHealthUtil
 import com.orion.player.util.NetworkMonitor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CompletableDeferred
@@ -64,17 +62,17 @@ class PlaybackViewModel @Inject constructor(
     private val contentSyncCoordinator: ContentSyncCoordinator,
     private val playerEventStreamClient: PlayerEventStreamClient,
     private val telemetryRepository: TelemetryRepository,
-    private val deviceHealthUtil: DeviceHealthUtil,
     private val networkMonitor: NetworkMonitor,
     private val securePrefs: SecurePrefs,
     private val healthMonitor: PlayerHealthMonitor,
     private val recoveryCoordinator: PlaybackRecoveryCoordinator,
-    private val stabilityMonitor: StabilityMonitor,
-    private val deviceHealthReporter: DeviceHealthReporter,
-    private val devicePermissionReporter: DevicePermissionReporter,
-    private val deviceMetadataCollector: DeviceMetadataCollector,
     private val remoteCommandExecutor: RemoteCommandExecutor,
-    private val deviceLogCollector: DeviceLogCollector
+    private val deviceLogCollector: DeviceLogCollector,
+    private val heartbeatScheduler: DeviceHeartbeatScheduler,
+    private val contentSyncScheduler: ContentSyncScheduler,
+    private val revisionPollScheduler: RevisionPollScheduler,
+    private val initialSyncCoordinator: InitialSyncCoordinator,
+    private val postPairingBootstrap: PostPairingBootstrap
 ) : ViewModel() {
 
     companion object {
@@ -106,10 +104,6 @@ class PlaybackViewModel @Inject constructor(
 
     private var videoStopToken = 0L
 
-    private var revisionPollJob: Job? = null
-    private var fullSyncFallbackJob: Job? = null
-    private var heartbeatJob: Job? = null
-    private var popFlushJob: Job? = null
     private var backgroundServicesStarted = false
 
     private val _isUnpaired = MutableStateFlow(false)
@@ -118,11 +112,31 @@ class PlaybackViewModel @Inject constructor(
     init {
         healthMonitor.recordStartupInit()
         healthMonitor.registerSlotLoopAliveChecker { advanceJob?.isActive == true }
+        viewModelScope.launch {
+            heartbeatScheduler.responses.collect { response ->
+                handleHeartbeatResponse(response)
+            }
+        }
         recoveryCoordinator.registerPlaybackRestartHandler { reason ->
             recoverPlayback(reason)
         }
-        remoteCommandExecutor.registerForceSyncHandler {
-            requestContentSync(force = true, reason = "remote.force_sync")
+        contentSyncScheduler.registerFullSyncHandler { reason ->
+            requestContentSync(force = true, reason = reason)
+        }
+        revisionPollScheduler.registerSyncHandler { reason ->
+            executeForcedSync(reason, commandId = null)
+        }
+        contentSyncCoordinator.registerRetrySyncHandler {
+            requestContentSync(force = true, reason = "sync.retry")
+        }
+        initialSyncCoordinator.registerSyncHandler { reason, commandId ->
+            executeForcedSync(reason, commandId)
+        }
+        viewModelScope.launch {
+            if (securePrefs.pairingBootstrapPending) {
+                securePrefs.pairingBootstrapPending = false
+                postPairingBootstrap.onPairingCompleted()
+            }
         }
         healthMonitor.recordPlaybackExpected(securePrefs.isAuthenticated())
         startPlayback()
@@ -142,8 +156,9 @@ class PlaybackViewModel @Inject constructor(
         OrionRecoveryLogger.logBackgroundSyncStarted("post-playback")
         startRealtimeSync()
         startNetworkReconnectSync()
-        startHeartbeatLoop()
-        startPopFlushLoop()
+        heartbeatScheduler.start()
+        contentSyncScheduler.start()
+        revisionPollScheduler.start()
     }
 
     private fun currentSnapshot(): PlaybackSnapshot? {
@@ -166,6 +181,9 @@ class PlaybackViewModel @Inject constructor(
 
     private fun startPlayback() {
         viewModelScope.launch {
+            if (securePrefs.isAuthenticated()) {
+                ensureBackgroundServicesStarted()
+            }
             SyncDiagnostics.logStartupDevice(securePrefs)
             healthMonitor.recordPlaybackExpected(securePrefs.isAuthenticated())
 
@@ -297,27 +315,6 @@ class PlaybackViewModel @Inject constructor(
             playerEventStreamClient.syncTriggers.collect { trigger ->
                 trigger.revision?.let { contentSyncCoordinator.onPushRevision(it) }
                 requestContentSync(force = true, reason = trigger.reason)
-            }
-        }
-
-        revisionPollJob?.cancel()
-        revisionPollJob = viewModelScope.launch {
-            while (true) {
-                delay(SyncConfig.REVISION_POLL_INTERVAL_MS)
-                when (val result = contentSyncCoordinator.checkRevisionChanged()) {
-                    RevisionCheckResult.Changed -> requestContentSync(force = true, reason = "revision.changed")
-                    RevisionCheckResult.Unpaired -> handleUnpaired()
-                    RevisionCheckResult.Unavailable,
-                    RevisionCheckResult.Unchanged -> Unit
-                }
-            }
-        }
-
-        fullSyncFallbackJob?.cancel()
-        fullSyncFallbackJob = viewModelScope.launch {
-            while (true) {
-                delay(SyncConfig.FULL_SYNC_POLL_INTERVAL_MS)
-                requestContentSync(force = true, reason = "full.poll")
             }
         }
     }
@@ -937,99 +934,88 @@ class PlaybackViewModel @Inject constructor(
 
     fun onUrlLoadSuccess(assetName: String) = onPlaybackStarted(assetName)
 
-    fun onUrlLoadFailed(assetName: String) {
+fun onUrlLoadFailed(assetName: String) {
+        // Still mark content ready so the configured slot duration continues
+        // (fallback / blank content) instead of waiting for the 30s ready timeout.
+        onPlaybackStarted(assetName)
         viewModelScope.launch {
             activePopSession?.takeIf { it.assetName == assetName && !it.finalized }?.let {
-                finalizePopSession("FAILED", it)
+                // Keep session running; PoP will finalize as VERIFIED/FAILED at slot end.
             }
         }
     }
 
-    private fun startHeartbeatLoop() {
-        heartbeatJob?.cancel()
-        heartbeatJob = viewModelScope.launch {
-            sendHeartbeatNow()
-            while (true) {
-                delay(60_000L)
-                sendHeartbeatNow()
+    private fun handleHeartbeatResponse(response: HeartbeatResponse) {
+        contentSyncScheduler.updateInterval(response.syncIntervalSeconds)
+        if (response.syncRequired == true) {
+            requestContentSync(force = true, reason = "heartbeat.sync_required")
+        } else if (contentSyncCoordinator.consumeRevisionIfChanged(response.contentRevision)) {
+            requestContentSync(force = true, reason = "heartbeat.revision")
+        }
+        viewModelScope.launch {
+            try {
+                telemetryRepository.flushQueuedHeartbeats()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
 
-    private suspend fun sendHeartbeatNow() {
-        try {
-            val currentAsset = playlistAssets.getOrNull(_currentAssetIndex.value)?.name
-            val health = deviceHealthReporter.snapshot(
-                playlistName = playlistInfo?.name,
-                currentAsset = currentAsset,
-                queueSize = playlistAssets.size
+    private suspend fun executeForcedSync(reason: String, commandId: String?): Boolean {
+        val displaying = isDisplayingContent()
+        val outcome = withContext(Dispatchers.IO) {
+            contentSyncCoordinator.syncContent(
+                current = currentSnapshot(),
+                force = true,
+                onDownloadProgress = if (!displaying) {
+                    { completed, total ->
+                        viewModelScope.launch {
+                            if (!isDisplayingContent()) {
+                                _uiState.value = PlaybackUiState.Downloading(completed, total)
+                            }
+                        }
+                    }
+                } else {
+                    null
+                }
             )
-            val metadata = deviceMetadataCollector.heartbeatSnapshot(
-                currentAsset = currentAsset,
-                currentPlaylistName = playlistInfo?.name,
-                playbackStatus = health.playbackStatus,
-                playbackUptimeSeconds = health.uptimeSeconds,
-                networkOnline = health.networkOnline
-            )
-            val response = telemetryRepository.sendHeartbeat(
-                HeartbeatRequest(
-                    cpu = deviceHealthUtil.getCpuUsage().coerceAtLeast(0),
-                    ram = deviceHealthUtil.getRamUsage().coerceAtLeast(0),
-                    temp = deviceHealthUtil.getTemperature().coerceAtLeast(0),
-                    currentContent = currentAsset,
-                    currentAsset = metadata.currentAsset,
-                    currentPlaylistName = metadata.currentPlaylistName,
-                    playbackStatus = metadata.playbackStatus,
-                    playbackUptimeSeconds = metadata.playbackUptimeSeconds,
-                    ip = metadata.ip,
-                    macAddress = metadata.macAddress,
-                    resolution = metadata.resolution,
-                    orientation = metadata.orientation,
-                    timezone = metadata.timezone,
-                    androidVersion = metadata.androidVersion,
-                    playerVersion = metadata.playerVersion,
-                    deviceModel = metadata.deviceModel,
-                    manufacturer = metadata.manufacturer,
-                    deviceName = metadata.deviceName,
-                    lastSyncTime = metadata.lastSyncTime,
-                    storageTotalBytes = health.storageTotalMb * 1024L * 1024L,
-                    storageFreeBytes = health.storageFreeMb * 1024L * 1024L,
-                    networkStatus = metadata.networkStatus,
-                    permissions = devicePermissionReporter.toHeartbeatPayload()
-                )
-            )
-
-            response?.commands?.let { remoteCommandExecutor.dispatch(it) }
-
-            if (response?.syncRequired == true) {
-                requestContentSync(force = true, reason = "heartbeat.syncRequired")
-            } else if (contentSyncCoordinator.consumeRevisionIfChanged(response?.contentRevision)) {
-                requestContentSync(force = true, reason = "heartbeat.revision")
-            }
-
-            telemetryRepository.flushAll()
-            stabilityMonitor.reportIfDue(
-                queueSize = playlistAssets.size,
-                currentAsset = currentAsset,
-                playlistName = playlistInfo?.name
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
-    }
 
-    private fun startPopFlushLoop() {
-        popFlushJob?.cancel()
-        popFlushJob = viewModelScope.launch {
-            while (true) {
-                delay(300_000L)
-                try {
-                    telemetryRepository.flushAll()
-                } catch (e: Exception) {
-                    e.printStackTrace()
+        val success = when (outcome) {
+            is SyncOutcome.Unpaired -> {
+                handleUnpaired()
+                false
+            }
+            is SyncOutcome.Updated -> {
+                applySnapshotIfPlayable(outcome.snapshot, outcome.structureChanged)
+                telemetryRepository.flushAll()
+                snapshotIsPlayable(outcome.snapshot) || isDisplayingContent()
+            }
+            is SyncOutcome.Unchanged -> {
+                val fallback = contentSyncCoordinator.loadCachedSnapshot()
+                if (!isDisplayingContent() && fallback != null && snapshotIsPlayable(fallback)) {
+                    applySnapshot(fallback, structureChanged = true)
+                    true
+                } else {
+                    isDisplayingContent()
                 }
             }
+            is SyncOutcome.NoContent -> false
+            is SyncOutcome.Failed -> {
+                if (!isDisplayingContent()) {
+                    val msg = outcome.message.ifBlank { "Content download failed" }
+                    _uiState.value = PlaybackUiState.WaitingForInitialDownload(msg)
+                }
+                false
+            }
+            is SyncOutcome.Downloading -> false
         }
+
+        if (success) {
+            initialSyncCoordinator.markInitialDownloadStarted()
+            ensureBackgroundServicesStarted()
+        }
+        return success
     }
 
     private suspend fun queuePopLog(record: PopLogRecord) {
@@ -1047,15 +1033,15 @@ class PlaybackViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         recoveryCoordinator.unregisterPlaybackRestartHandler()
+        contentSyncScheduler.unregisterFullSyncHandler()
+        revisionPollScheduler.unregisterSyncHandler()
+        contentSyncCoordinator.unregisterRetrySyncHandler()
+        initialSyncCoordinator.unregisterSyncHandler()
         remoteCommandExecutor.unregisterForceSyncHandler()
         remoteCommandExecutor.unregisterScreenshotWindowProvider()
         playerEventStreamClient.stop()
         slotGeneration++
         advanceJob?.cancel()
-        revisionPollJob?.cancel()
-        fullSyncFallbackJob?.cancel()
-        heartbeatJob?.cancel()
-        popFlushJob?.cancel()
     }
 }
 

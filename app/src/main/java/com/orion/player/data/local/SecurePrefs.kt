@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.orion.player.data.recovery.PlayerRuntimeConfig
+import com.orion.player.data.sync.SyncConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.UUID
 import javax.inject.Inject
@@ -33,6 +34,7 @@ class SecurePrefs @Inject constructor(
     companion object {
         private const val KEY_HARDWARE_ID = "hardware_id"
         private const val KEY_DEVICE_TOKEN = "device_token"
+        private const val KEY_CMS_DEVICE_ID = "cms_device_id"
         private const val KEY_ORGANIZATION_ID = "organization_id"
         private const val KEY_DEVICE_NAME = "device_name"
         private const val KEY_IS_PAIRED = "is_paired"
@@ -40,6 +42,15 @@ class SecurePrefs @Inject constructor(
         private const val KEY_PAIRING_CODE = "pairing_code"
         private const val KEY_KIOSK_MODE = "kiosk_mode_enabled"
         private const val KEY_LAST_SUCCESSFUL_SYNC_AT = "last_successful_sync_at"
+        private const val KEY_SYNC_INTERVAL_SECONDS = "sync_interval_seconds"
+        private const val KEY_REVISION_POLL_INTERVAL_SECONDS = "revision_poll_interval_seconds"
+        private const val KEY_LAST_STORED_REVISION = "last_stored_revision"
+        private const val KEY_LAST_STORED_PLAYLIST_ID = "last_stored_playlist_id"
+        private const val KEY_LAST_STORED_LAYOUT_ID = "last_stored_layout_id"
+        private const val KEY_PAIRED_AT_MS = "paired_at_ms"
+        private const val KEY_INITIAL_DOWNLOAD_STARTED = "initial_download_started"
+        private const val KEY_INITIAL_SYNC_TIMEOUT_SECONDS = "initial_sync_timeout_seconds"
+        private const val KEY_PAIRING_BOOTSTRAP_PENDING = "pairing_bootstrap_pending"
     }
 
     /**
@@ -63,8 +74,36 @@ class SecurePrefs @Inject constructor(
         set(value) = prefs.edit().putString(KEY_PAIRING_CODE, value).apply()
 
     var deviceToken: String?
-        get() = prefs.getString(KEY_DEVICE_TOKEN, null)
-        set(value) = prefs.edit().putString(KEY_DEVICE_TOKEN, value).apply()
+        get() {
+            val hardwareId = prefs.getString(KEY_HARDWARE_ID, null)?.trim().orEmpty()
+            if (hardwareId.isBlank()) return null
+            val scoped = prefs.getString(deviceTokenKey(hardwareId), null)
+            if (!scoped.isNullOrBlank()) return scoped
+            val legacy = prefs.getString(KEY_DEVICE_TOKEN, null)
+            if (!legacy.isNullOrBlank()) {
+                prefs.edit()
+                    .putString(deviceTokenKey(hardwareId), legacy)
+                    .remove(KEY_DEVICE_TOKEN)
+                    .apply()
+                return legacy
+            }
+            return null
+        }
+        set(value) {
+            val hardwareId = getOrCreateHardwareId()
+            val editor = prefs.edit()
+            if (value.isNullOrBlank()) {
+                editor.remove(deviceTokenKey(hardwareId)).remove(KEY_DEVICE_TOKEN)
+            } else {
+                editor.putString(deviceTokenKey(hardwareId), value)
+            }
+            editor.apply()
+        }
+
+    /** CMS-assigned device record ID, confirmed from pop-logs responses. */
+    var cmsDeviceId: String?
+        get() = prefs.getString(KEY_CMS_DEVICE_ID, null)
+        set(value) = prefs.edit().putString(KEY_CMS_DEVICE_ID, value).apply()
 
     var organizationId: String?
         get() = prefs.getString(KEY_ORGANIZATION_ID, null)
@@ -87,6 +126,44 @@ class SecurePrefs @Inject constructor(
         get() = prefs.getString(KEY_LAST_SUCCESSFUL_SYNC_AT, null)
         set(value) = prefs.edit().putString(KEY_LAST_SUCCESSFUL_SYNC_AT, value).apply()
 
+    /** Seconds between full /player/sync polls (server-configurable, default 120). */
+    var syncIntervalSeconds: Int
+        get() = prefs.getInt(KEY_SYNC_INTERVAL_SECONDS, SyncConfig.DEFAULT_SYNC_INTERVAL_SECONDS)
+        set(value) = prefs.edit().putInt(KEY_SYNC_INTERVAL_SECONDS, value).apply()
+
+    /** Seconds between lightweight /player/sync-revision polls (server-configurable, default 5). */
+    var revisionPollIntervalSeconds: Int
+        get() = prefs.getInt(KEY_REVISION_POLL_INTERVAL_SECONDS, SyncConfig.DEFAULT_REVISION_POLL_INTERVAL_SECONDS)
+        set(value) = prefs.edit().putInt(KEY_REVISION_POLL_INTERVAL_SECONDS, value).apply()
+
+    var lastStoredRevision: String?
+        get() = prefs.getString(KEY_LAST_STORED_REVISION, null)
+        set(value) = prefs.edit().putString(KEY_LAST_STORED_REVISION, value).apply()
+
+    var lastStoredPlaylistId: String?
+        get() = prefs.getString(KEY_LAST_STORED_PLAYLIST_ID, null)
+        set(value) = prefs.edit().putString(KEY_LAST_STORED_PLAYLIST_ID, value).apply()
+
+    var lastStoredLayoutId: String?
+        get() = prefs.getString(KEY_LAST_STORED_LAYOUT_ID, null)
+        set(value) = prefs.edit().putString(KEY_LAST_STORED_LAYOUT_ID, value).apply()
+
+    var pairedAtMs: Long
+        get() = prefs.getLong(KEY_PAIRED_AT_MS, 0L)
+        set(value) = prefs.edit().putLong(KEY_PAIRED_AT_MS, value).apply()
+
+    var initialDownloadStarted: Boolean
+        get() = prefs.getBoolean(KEY_INITIAL_DOWNLOAD_STARTED, false)
+        set(value) = prefs.edit().putBoolean(KEY_INITIAL_DOWNLOAD_STARTED, value).apply()
+
+    var initialSyncTimeoutSeconds: Int
+        get() = prefs.getInt(KEY_INITIAL_SYNC_TIMEOUT_SECONDS, SyncConfig.DEFAULT_SYNC_INTERVAL_SECONDS)
+        set(value) = prefs.edit().putInt(KEY_INITIAL_SYNC_TIMEOUT_SECONDS, value).apply()
+
+    var pairingBootstrapPending: Boolean
+        get() = prefs.getBoolean(KEY_PAIRING_BOOTSTRAP_PENDING, false)
+        set(value) = prefs.edit().putBoolean(KEY_PAIRING_BOOTSTRAP_PENDING, value).apply()
+
     fun isAuthenticated(): Boolean =
         isPaired && !deviceToken.isNullOrBlank()
 
@@ -98,11 +175,17 @@ class SecurePrefs @Inject constructor(
         organizationId: String,
         deviceName: String?
     ) {
+        val hardwareId = getOrCreateHardwareId()
+        val now = System.currentTimeMillis()
         prefs.edit()
-            .putString(KEY_DEVICE_TOKEN, deviceToken)
+            .putString(deviceTokenKey(hardwareId), deviceToken)
             .putString(KEY_ORGANIZATION_ID, organizationId)
             .putString(KEY_DEVICE_NAME, deviceName)
             .putBoolean(KEY_IS_PAIRED, true)
+            .putLong(KEY_PAIRED_AT_MS, now)
+            .putBoolean(KEY_INITIAL_DOWNLOAD_STARTED, false)
+            .putBoolean(KEY_PAIRING_BOOTSTRAP_PENDING, true)
+            .remove(KEY_CMS_DEVICE_ID)
             .apply()
     }
 
@@ -110,14 +193,24 @@ class SecurePrefs @Inject constructor(
      * Clears all stored credentials (e.g., on 401 / unpairing).
      */
     fun clearCredentials() {
-        prefs.edit()
+        val hardwareId = prefs.getString(KEY_HARDWARE_ID, null)?.trim().orEmpty()
+        val editor = prefs.edit()
             .remove(KEY_DEVICE_TOKEN)
             .remove(KEY_ORGANIZATION_ID)
             .remove(KEY_DEVICE_NAME)
             .remove(KEY_PAIRING_SECRET)
             .remove(KEY_PAIRING_CODE)
+            .remove(KEY_CMS_DEVICE_ID)
+            .remove(KEY_PAIRED_AT_MS)
+            .remove(KEY_INITIAL_DOWNLOAD_STARTED)
+            .remove(KEY_LAST_STORED_REVISION)
+            .remove(KEY_LAST_STORED_PLAYLIST_ID)
+            .remove(KEY_LAST_STORED_LAYOUT_ID)
             .putBoolean(KEY_IS_PAIRED, false)
-            .apply()
+        if (hardwareId.isNotBlank()) {
+            editor.remove(deviceTokenKey(hardwareId))
+        }
+        editor.apply()
     }
 
     /**
@@ -126,4 +219,10 @@ class SecurePrefs @Inject constructor(
     fun getBearerToken(): String? {
         return deviceToken?.let { "Bearer $it" }
     }
+
+    fun deviceTokenPrefix(): String =
+        deviceToken?.take(8)?.let { "$it..." } ?: "none"
+
+    private fun deviceTokenKey(hardwareId: String): String =
+        "device_token_$hardwareId"
 }

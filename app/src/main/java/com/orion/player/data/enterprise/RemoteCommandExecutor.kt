@@ -37,10 +37,10 @@ class RemoteCommandExecutor @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    @Volatile private var forceSyncHandler: (() -> Unit)? = null
+    @Volatile private var forceSyncHandler: (suspend (commandId: String?, reason: String) -> Boolean)? = null
     @Volatile private var screenshotWindowProvider: (() -> Window?)? = null
 
-    fun registerForceSyncHandler(handler: () -> Unit) {
+    fun registerForceSyncHandler(handler: suspend (commandId: String?, reason: String) -> Boolean) {
         forceSyncHandler = handler
     }
 
@@ -66,12 +66,12 @@ class RemoteCommandExecutor @Inject constructor(
     }
 
     private suspend fun execute(command: RemoteCommand) {
-        val type = command.type.lowercase(Locale.US)
+        val type = command.type.trim().lowercase(Locale.US).replace('-', '_')
         logCollector.logCommand(type, "received id=${command.id}")
         val result = when (type) {
             RemoteCommandType.RESTART_PLAYER -> restartPlayer()
             RemoteCommandType.RESTART_DEVICE -> restartDevice()
-            RemoteCommandType.FORCE_SYNC -> forceSync()
+            RemoteCommandType.FORCE_SYNC -> forceSync(command)
             RemoteCommandType.CLEAR_CACHE -> clearCache()
             RemoteCommandType.REDOWNLOAD_PLAYLIST -> redownloadPlaylist()
             RemoteCommandType.UPLOAD_LOGS -> uploadLogs()
@@ -104,11 +104,11 @@ class RemoteCommandExecutor @Inject constructor(
         }
     }
 
-    private fun forceSync(): String {
+    private suspend fun forceSync(command: RemoteCommand): String {
         val handler = forceSyncHandler
         return if (handler != null) {
-            mainHandler.post { handler() }
-            "sync_triggered"
+            val success = handler(command.id, "remote.force_sync")
+            if (success) "sync_completed" else "sync_failed"
         } else {
             "sync_handler_unavailable"
         }
@@ -121,12 +121,16 @@ class RemoteCommandExecutor @Inject constructor(
             if (file.isFile && file.delete()) deleted++
         }
         logCollector.logSync("Cache cleared by remote command: deleted=$deleted files")
-        forceSyncHandler?.let { mainHandler.post { it() } }
+        forceSyncHandler?.let { handler ->
+            scope.launch { handler(null, "remote.clear_cache") }
+        }
         return "cleared_files=$deleted"
     }
 
     private suspend fun redownloadPlaylist(): String {
-        forceSyncHandler?.let { mainHandler.post { it() } }
+        forceSyncHandler?.let { handler ->
+            handler(null, "remote.redownload_playlist")
+        }
         return "redownload_triggered"
     }
 

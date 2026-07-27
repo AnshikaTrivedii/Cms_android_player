@@ -37,7 +37,9 @@ interface OrionPlayerApi {
         @Query("playlistVersion") playlistVersion: Int? = null,
         @Query("layoutVersion") layoutVersion: Int? = null,
         @Query("knownAssetIds") knownAssetIds: String? = null,
-        @Query("assetVersions") assetVersions: String? = null
+        @Query("assetVersions") assetVersions: String? = null,
+        @Query("recoverCache") recoverCache: Boolean? = null,
+        @Query("missingAssetIds") missingAssetIds: String? = null
     ): SyncResponse
 
     @GET("player/sync-revision")
@@ -56,4 +58,22 @@ interface OrionPlayerApi {
         @Header("Authorization") token: String,
         @Body body: com.orion.player.data.enterprise.DeviceLogsUploadRequest
     ): com.orion.player.data.enterprise.DeviceLogsUploadResponse
+
+    @POST("player/device-report")
+    suspend fun submitDeviceReport(
+        @Header("Authorization") token: String,
+        @Body body: DeviceReportRequest
+    ): DeviceReportResponse
+
+    @POST("player/system-logs")
+    suspend fun submitSystemLogs(
+        @Header("Authorization") token: String,
+        @Body body: SystemLogsRequest
+    ): SystemLogsResponse
+
+    @POST("player/cache-report")
+    suspend fun reportCache(
+        @Header("Authorization") token: String,
+        @Body body: CacheReportRequest
+    ): Unit
 }

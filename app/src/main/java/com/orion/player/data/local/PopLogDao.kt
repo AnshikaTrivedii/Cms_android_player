@@ -28,4 +28,10 @@ interface PopLogDao {
 
     @Query("SELECT COUNT(*) FROM pop_logs WHERE isSynced = 0")
     suspend fun getUnsyncedCount(): Int
+
+    @Query("DELETE FROM pop_logs WHERE isSynced = 0")
+    suspend fun deleteUnsynced()
+
+    @Query("DELETE FROM pop_logs")
+    suspend fun deleteAll()
 }

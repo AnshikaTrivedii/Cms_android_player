@@ -85,13 +85,11 @@ class PlaylistCacheRepository @Inject constructor(
         val cached = playlistCacheDao.getPlaylist()
         return SyncVersions(
             playlistVersion = cached?.playlistVersion,
-            layoutVersion = null
+            layoutVersion = cached?.layoutVersion
         )
     }
 
-    suspend fun getPlaylistVersion(): Int? = playlistCacheDao.getPlaylist()?.playlistVersion
-
-    suspend fun getLayoutVersion(): Int? = null
+    suspend fun getLayoutVersion(): Int? = playlistCacheDao.getPlaylist()?.layoutVersion
 
     suspend fun saveSnapshot(
         snapshot: PlaybackSnapshot,
@@ -137,7 +135,10 @@ class PlaylistCacheRepository @Inject constructor(
             playlist = entity,
             assets = orderedAssets.map { asset ->
                 val localFile = snapshot.localFiles[asset.id]
-                val durationToStore = asset.cmsDurationSeconds ?: asset.durationSeconds
+                // Videos without CMS duration must stay 0 so hasExplicitDuration() is false
+                // after cache reload (otherwise default 10s truncates playback).
+                val durationToStore = asset.cmsDurationSeconds
+                    ?: if (asset.type.equals("VIDEO", ignoreCase = true)) 0 else asset.durationSeconds
                 previousDurations[asset.id]?.takeIf { it != durationToStore }?.let { oldDuration ->
                     Log.i(
                         TAG,

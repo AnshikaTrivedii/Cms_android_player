@@ -22,6 +22,11 @@ import com.orion.player.data.recovery.PlayerHealthMonitor
 import com.orion.player.data.recovery.PlayerLaunchHelper
 import com.orion.player.data.recovery.PlayerRuntimeConfig
 import com.orion.player.data.stability.StabilityMonitor
+import com.orion.player.data.analytics.PopConfigManager
+import com.orion.player.data.analytics.PopLogFlushScheduler
+import com.orion.player.data.sync.ContentSyncScheduler
+import com.orion.player.data.sync.RevisionPollScheduler
+import com.orion.player.data.telemetry.DeviceHeartbeatScheduler
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -44,6 +49,10 @@ class PlayerForegroundService : Service() {
     @Inject lateinit var recoveryCoordinator: PlaybackRecoveryCoordinator
     @Inject lateinit var securePrefs: SecurePrefs
     @Inject lateinit var stabilityMonitor: StabilityMonitor
+    @Inject lateinit var heartbeatScheduler: DeviceHeartbeatScheduler
+    @Inject lateinit var popLogFlushScheduler: PopLogFlushScheduler
+    @Inject lateinit var contentSyncScheduler: ContentSyncScheduler
+    @Inject lateinit var revisionPollScheduler: RevisionPollScheduler
 
     private val handler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -78,6 +87,14 @@ class PlayerForegroundService : Service() {
 
         handler.removeCallbacks(healthCheckRunnable)
         handler.post(healthCheckRunnable)
+
+        if (securePrefs.isAuthenticated()) {
+            heartbeatScheduler.start()
+            popLogFlushScheduler.start()
+            contentSyncScheduler.start()
+            revisionPollScheduler.start()
+        }
+
         return START_STICKY
     }
 

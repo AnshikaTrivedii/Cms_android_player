@@ -14,6 +14,49 @@ object PopTelemetryLogger {
     private val uploadedEvents = AtomicLong(0)
     private val failedUploadEvents = AtomicLong(0)
 
+    fun logSchedulerStarted(hardwareId: String, intervalMs: Long) {
+        Log.i(TAG, "Flush scheduler active hardwareId=$hardwareId intervalMs=$intervalMs")
+    }
+
+    fun logConfigUpdate(enabled: Boolean, popLogsExpected: Boolean?, proofOfPlay: Boolean?) {
+        Log.i(
+            TAG,
+            "Server config: popEnabled=$enabled popLogsExpected=$popLogsExpected proofOfPlay=$proofOfPlay"
+        )
+    }
+
+    fun logDisabled(reason: String) {
+        Log.w(TAG, "PoP collection disabled: $reason")
+    }
+
+    fun logSkipped(reason: String) {
+        Log.i(TAG, "PoP skipped: $reason")
+    }
+
+    fun logSubmitAttempt(
+        hardwareId: String,
+        tokenPrefix: String,
+        pendingCount: Int,
+        batchSize: Int
+    ) {
+        Log.i(
+            TAG,
+            "Submit attempt hardwareId=$hardwareId tokenPrefix=$tokenPrefix pending=$pendingCount batch=$batchSize"
+        )
+    }
+
+    fun logSubmitSuccess(deviceId: String?, deviceName: String?, received: Int, skipped: Int?) {
+        Log.i(
+            TAG,
+            "Submit success deviceId=${deviceId.orEmpty()} deviceName=${deviceName.orEmpty()} " +
+                "received=$received skipped=${skipped ?: 0} totalUploaded=${uploadedEvents.get()}"
+        )
+    }
+
+    fun logDeviceIdMismatch(expected: String, actual: String) {
+        Log.e(TAG, "Device ID mismatch: stored=$expected response=$actual — keeping queue")
+    }
+
     fun logGenerated(assetName: String, status: String) {
         generatedEvents.incrementAndGet()
         Log.i(TAG, "Event generated: asset=$assetName status=$status total=${generatedEvents.get()}")

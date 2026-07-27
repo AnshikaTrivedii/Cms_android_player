@@ -9,7 +9,14 @@ object SyncConfig {
     const val REVISION_POLL_INTERVAL_MS = 5_000L
 
     /** Full sync fallback when revision endpoint and SSE are unavailable. */
-    const val FULL_SYNC_POLL_INTERVAL_MS = 15_000L
+    @Deprecated("Use SyncIntervalConfig — server-driven, default 120s")
+    const val FULL_SYNC_POLL_INTERVAL_MS = 120_000L
+
+    /** Default full sync interval when the server omits syncIntervalSeconds. */
+    const val DEFAULT_SYNC_INTERVAL_SECONDS = 120
+
+    /** Default revision poll interval when the server omits revisionPollIntervalSeconds. */
+    const val DEFAULT_REVISION_POLL_INTERVAL_SECONDS = 5
 
     /** Minimum gap between full sync executions (debounce burst triggers). */
     const val MIN_SYNC_DEBOUNCE_MS = 2_000L

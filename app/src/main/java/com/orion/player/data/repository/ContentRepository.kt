@@ -18,6 +18,12 @@ import com.orion.player.util.NetworkDiagnostics
 import com.orion.player.util.retryOnNetworkFailure
 import com.orion.player.util.SessionGuard
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -53,7 +59,9 @@ class ContentRepository @Inject constructor(
         playlistVersion: Int? = null,
         layoutVersion: Int? = null,
         knownAssetIds: List<String>? = null,
-        assetVersions: Map<String, Int>? = null
+        assetVersions: Map<String, Int>? = null,
+        recoverCache: Boolean? = null,
+        missingAssetIds: List<String>? = null
     ): SyncResponse? {
         if (!sessionGuard.isPairedWithToken()) return null
         NetworkDiagnostics.warmUpServer(okHttpClient)
@@ -66,7 +74,9 @@ class ContentRepository @Inject constructor(
                 knownAssetIds = knownAssetIds?.takeIf { it.isNotEmpty() }?.joinToString(","),
                 assetVersions = assetVersions?.takeIf { it.isNotEmpty() }
                     ?.entries
-                    ?.joinToString(",") { "${it.key}:${it.value}" }
+                    ?.joinToString(",") { "${it.key}:${it.value}" },
+                recoverCache = recoverCache?.takeIf { it },
+                missingAssetIds = missingAssetIds?.takeIf { it.isNotEmpty() }?.joinToString(",")
             )
         }
     }
@@ -178,35 +188,70 @@ class ContentRepository @Inject constructor(
     }
 
     /**
-     * Downloads playlist assets not yet on disk. Skips assets already cached (playlist change reuse).
+     * Downloads playlist assets not yet on disk, up to [MAX_CONCURRENT_DOWNLOADS] in parallel.
      */
     suspend fun downloadAllAssets(
         assets: List<AssetInfo>,
         onProgress: ((completed: Int, total: Int) -> Unit)? = null
-    ): Map<String, File> {
+    ): Map<String, File> = coroutineScope {
         val result = mutableMapOf<String, File>()
-
         val downloadableAssets = assets.filter { asset ->
-            asset.assetTypeRequiresDownload() && !isAssetCached(asset)
+            asset.requiresDownload && asset.available && asset.assetTypeRequiresDownload() && !isAssetCached(asset)
         }
 
-        for ((index, asset) in downloadableAssets.withIndex()) {
-            val file = downloadAsset(asset)
-            if (file != null) {
-                result[asset.id] = file
-            } else {
-                findCachedFileForAsset(asset)?.let { existing ->
-                    result[asset.id] = existing
+        if (downloadableAssets.isEmpty()) {
+            if (assets.isNotEmpty()) onProgress?.invoke(1, 1)
+            return@coroutineScope result
+        }
+
+        val semaphore = Semaphore(MAX_CONCURRENT_DOWNLOADS)
+        var completed = 0
+        val total = downloadableAssets.size
+
+        downloadableAssets.map { asset ->
+            async {
+                semaphore.withPermit {
+                    val file = downloadAssetWithRetry(asset)
+                    synchronized(result) {
+                        if (file != null) {
+                            result[asset.id] = file
+                        } else {
+                            findCachedFileForAsset(asset)?.let { existing ->
+                                result[asset.id] = existing
+                            }
+                        }
+                        completed++
+                        onProgress?.invoke(completed, total.coerceAtLeast(1))
+                    }
                 }
             }
-            onProgress?.invoke(index + 1, downloadableAssets.size.coerceAtLeast(1))
-        }
+        }.awaitAll()
 
-        if (downloadableAssets.isEmpty() && assets.isNotEmpty()) {
-            onProgress?.invoke(1, 1)
-        }
+        result
+    }
 
-        return result
+    private suspend fun downloadAssetWithRetry(asset: AssetInfo, maxAttempts: Int = 5): File? {
+        var backoffMs = 1_000L
+        repeat(maxAttempts) { attempt ->
+            val file = downloadAsset(asset)
+            if (file != null) return file
+            Log.w(
+                TAG,
+                "download_failed assetId=${asset.id} attempt=${attempt + 1} retryIn=${backoffMs / 1000}s"
+            )
+            if (attempt == maxAttempts - 1) return null
+            delay(backoffMs)
+            backoffMs = minOf(backoffMs * 2, 30_000L)
+        }
+        return null
+    }
+
+    suspend fun clearAllCacheFiles(): Int = withContext(Dispatchers.IO) {
+        var deleted = 0
+        cacheDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.delete()) deleted++
+        }
+        deleted
     }
 
     fun getLocalFile(asset: AssetInfo): File {
@@ -267,4 +312,8 @@ class ContentRepository @Inject constructor(
     fun getCacheKey(asset: AssetInfo): String = asset.cacheKey()
 
     private fun AssetInfo.cacheKey(): String = id
+
+    companion object {
+        private const val MAX_CONCURRENT_DOWNLOADS = 3
+    }
 }

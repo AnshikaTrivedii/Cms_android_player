@@ -1,7 +1,8 @@
 package com.orion.player.ui.playback.player
 
 import android.net.Uri
-import androidx.compose.foundation.background
+import android.util.Log
+import android.view.LayoutInflater
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -9,19 +10,23 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.orion.player.R
 import java.io.File
 
 /**
  * Full-screen video player using Media3 ExoPlayer.
  * Slot timing is owned by [com.orion.player.ui.playback.PlaybackViewModel].
+ *
+ * Uses TextureView (via [R.layout.orion_player_view]) so frames participate in the
+ * Compose draw pipeline. SurfaceView often shows black under Compose opaque layers.
  */
 @Composable
 fun VideoPlayer(
@@ -40,11 +45,10 @@ fun VideoPlayer(
         var readySignaled = false
         var endedSignaled = false
         ExoPlayer.Builder(context).build().apply {
-            val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
-            setMediaItem(mediaItem)
+            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
             playWhenReady = true
             repeatMode = Player.REPEAT_MODE_OFF
-            videoScalingMode = androidx.media3.common.C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+            videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
 
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -52,6 +56,11 @@ fun VideoPlayer(
                         Player.STATE_READY -> {
                             if (!readySignaled) {
                                 readySignaled = true
+                                Log.i(
+                                    TAG,
+                                    "video_ready file=${file.name} bytes=${file.length()} " +
+                                        "session=$playbackSessionKey"
+                                )
                                 onPlaybackStarted()
                             }
                             onRendererPulse()
@@ -71,7 +80,13 @@ fun VideoPlayer(
                     }
                 }
 
-                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                override fun onPlayerError(error: PlaybackException) {
+                    Log.e(
+                        TAG,
+                        "video_error file=${file.absolutePath} bytes=${file.length()} " +
+                            "exists=${file.exists()} code=${error.errorCodeName} msg=${error.message}",
+                        error
+                    )
                     onError()
                 }
             })
@@ -94,20 +109,15 @@ fun VideoPlayer(
         }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black)
-    ) {
+    Box(modifier = modifier.fillMaxSize()) {
         AndroidView(
             factory = { ctx ->
-                PlayerView(ctx).apply {
-                    player = exoPlayer
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                    setKeepContentOnPlayerReset(true)
-                }
+                (LayoutInflater.from(ctx)
+                    .inflate(R.layout.orion_player_view, null, false) as PlayerView)
+                    .apply {
+                        player = exoPlayer
+                        setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    }
             },
             update = { playerView ->
                 if (playerView.player !== exoPlayer) {
@@ -121,3 +131,5 @@ fun VideoPlayer(
         )
     }
 }
+
+private const val TAG = "OrionPlayback"

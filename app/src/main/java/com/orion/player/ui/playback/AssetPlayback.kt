@@ -12,11 +12,13 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.net.Uri
 import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType
 import com.orion.player.data.remote.AssetType.normalizedType
@@ -85,18 +87,35 @@ fun AssetPlayback(
             )
         }
         AssetType.HTML -> {
-            if (localFile == null || !localFile.exists()) {
-                UnavailableAssetPlaceholder(modifier)
-                return
+            val remoteUrl = asset.remoteSourceUrl()
+            when {
+                localFile != null && localFile.exists() && localFile.length() > 0L -> {
+                    HtmlPlayer(
+                        url = Uri.fromFile(localFile).toString(),
+                        localFile = localFile,
+                        playbackSessionKey = playbackSessionId,
+                        onLoadSuccess = { onPlaybackStarted(asset.name) },
+                        // Soft-fail like URL: keep slot timing, don't hard-skip the queue.
+                        onLoadFailed = { onUrlLoadFailed(asset.name) },
+                        modifier = modifier
+                    )
+                }
+                !remoteUrl.isNullOrBlank() -> {
+                    UrlPlayer(
+                        url = remoteUrl,
+                        cachedFile = null,
+                        onLoadSuccess = { onUrlLoadSuccess(asset.name) },
+                        onLoadFailed = { onUrlLoadFailed(asset.name) },
+                        modifier = modifier
+                    )
+                }
+                else -> {
+                    LaunchedEffect(asset.id, playbackSessionId) {
+                        onAssetFailed(asset.name)
+                    }
+                    UnavailableAssetPlaceholder(modifier)
+                }
             }
-            HtmlPlayer(
-                url = localFile.toURI().toString(),
-                localFile = localFile,
-                playbackSessionKey = playbackSessionId,
-                onLoadSuccess = { onPlaybackStarted(asset.name) },
-                onLoadFailed = { onAssetFailed(asset.name) },
-                modifier = modifier
-            )
         }
         AssetType.DOCUMENT -> {
             if (localFile == null || !localFile.exists()) {
