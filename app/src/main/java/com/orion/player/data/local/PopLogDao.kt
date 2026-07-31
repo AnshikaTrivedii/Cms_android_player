@@ -32,6 +32,9 @@ interface PopLogDao {
     @Query("DELETE FROM pop_logs WHERE isSynced = 0")
     suspend fun deleteUnsynced()
 
+    @Query("DELETE FROM pop_logs WHERE id IN (SELECT id FROM pop_logs WHERE isSynced = 0 ORDER BY id ASC LIMIT :count)")
+    suspend fun deleteOldestUnsynced(count: Int)
+
     @Query("DELETE FROM pop_logs")
     suspend fun deleteAll()
 }

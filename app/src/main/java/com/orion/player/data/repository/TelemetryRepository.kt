@@ -4,6 +4,7 @@ import android.util.Log
 import com.google.gson.Gson
 import com.orion.player.BuildConfig
 import com.orion.player.data.analytics.PopConfigManager
+import com.orion.player.data.analytics.PopHealthTracker
 import com.orion.player.data.analytics.PopLogRecord
 import com.orion.player.data.analytics.PopTelemetryLogger
 import com.orion.player.data.enterprise.CrashLogStore
@@ -26,6 +27,10 @@ import com.orion.player.data.remote.OrionPlayerApi
 import com.orion.player.data.remote.PlayerFeatures
 import com.orion.player.data.remote.PopLogEntry
 import com.orion.player.data.remote.PopLogsRequest
+import com.orion.player.data.config.DeviceConfigManager
+import com.orion.player.data.registration.DeviceRegistrationManager
+import com.orion.player.data.registration.DeviceRegistrationStatusParser
+import com.orion.player.data.repository.TelemetryRepository
 import com.orion.player.data.sync.SyncIntervalConfig
 import com.orion.player.data.telemetry.HeartbeatPayloadBuilder
 import com.orion.player.data.telemetry.HeartbeatPayloadNormalizer
@@ -49,12 +54,16 @@ class TelemetryRepository @Inject constructor(
     private val deviceLogCollector: DeviceLogCollector,
     private val crashLogStore: CrashLogStore,
     private val popConfigManager: PopConfigManager,
+    private val popHealthTracker: PopHealthTracker,
     private val syncIntervalConfig: SyncIntervalConfig,
-    private val heartbeatPayloadBuilder: HeartbeatPayloadBuilder
+    private val heartbeatPayloadBuilder: HeartbeatPayloadBuilder,
+    private val deviceRegistrationManager: DeviceRegistrationManager,
+    private val deviceConfigManager: DeviceConfigManager
 ) {
     companion object {
         private const val TAG = "OrionTelemetry"
         private const val FLUSH_BATCH_SIZE = 50
+        private const val MAX_QUEUE_SIZE = 10_000
         private const val MAX_HEARTBEAT_ATTEMPTS = 3
         private const val POP_DISABLED_REASON = "proof_of_play_disabled"
         private val gson: Gson = GsonConfig.create()
@@ -82,7 +91,16 @@ class TelemetryRepository @Inject constructor(
             try {
                 val response = api.sendHeartbeat(token = token, body = normalized)
                 val mapped = mapHeartbeatResponse(response)
+                deviceRegistrationManager.handleStatus(
+                    DeviceRegistrationStatusParser.fromSuccessField(mapped.deviceStatus)
+                )
                 applyServerPopConfig(mapped.popLogsExpected, mapped.features)
+                deviceConfigManager.applyFromServer(
+                    configVersion = mapped.configVersion,
+                    stretchToFit = mapped.stretchToFit,
+                    orientation = mapped.orientation,
+                    display = mapped.display
+                )
                 syncIntervalConfig.updateInterval(mapped.syncIntervalSeconds)
                 mapped.initialSyncTimeoutSeconds?.let {
                     securePrefs.initialSyncTimeoutSeconds = it.coerceIn(
@@ -115,6 +133,12 @@ class TelemetryRepository @Inject constructor(
                     error = lastError,
                     elapsedMs = System.currentTimeMillis() - started
                 )
+                if (e.code() == 401) {
+                    deviceRegistrationManager.handleStatus(
+                        DeviceRegistrationStatusParser.fromUnauthorized(lastBody, e.message())
+                    )
+                    return null
+                }
                 if (e.code() in 400..499 && e.code() != 408 && e.code() != 429) {
                     break@attemptLoop
                 }
@@ -202,22 +226,50 @@ class TelemetryRepository @Inject constructor(
     }
 
     suspend fun queuePopLog(record: PopLogRecord) {
-        if (!popConfigManager.isPopEnabled()) {
-            PopTelemetryLogger.logSkipped("pop_disabled")
+        if (!sessionGuard.isPairedWithToken()) {
+            PopTelemetryLogger.logSkipped("not_paired")
             return
         }
+        if (!popConfigManager.isCollectEnabled()) {
+            PopTelemetryLogger.logSkipped("collect_disabled")
+            return
+        }
+
+        enforceQueueCap()
         popLogDao.insert(record.toEntity())
         PopTelemetryLogger.logGenerated(record.assetName, record.status)
+        popHealthTracker.recordGenerated()
         val pending = popLogDao.getUnsyncedCount()
         PopTelemetryLogger.logQueueStatus(pending)
+
+        if (!popConfigManager.isUploadEnabled()) {
+            PopTelemetryLogger.logSkipped("upload_paused")
+            Log.d(TAG, "Queued PoP for ${record.assetName} (upload paused) pending=$pending")
+            return
+        }
+
         val synced = flushPopLogs()
-        Log.d(TAG, "Queued PoP for ${record.assetName} (${record.status}), synced=$synced pending=${popLogDao.getUnsyncedCount()}")
+        Log.d(
+            TAG,
+            "Queued PoP for ${record.assetName} (${record.status}), synced=$synced pending=${popLogDao.getUnsyncedCount()}"
+        )
+    }
+
+    private suspend fun enforceQueueCap() {
+        val pending = popLogDao.getUnsyncedCount()
+        if (pending < MAX_QUEUE_SIZE) return
+        val overflow = pending - MAX_QUEUE_SIZE + 1
+        popLogDao.deleteOldestUnsynced(overflow)
+        val msg = "queue_cap_drop overflow=$overflow pendingWas=$pending"
+        popHealthTracker.recordError(msg)
+        PopTelemetryLogger.logSkipped(msg)
+        Log.w(TAG, "PoP queue capped — dropped $overflow oldest unsynced row(s)")
     }
 
     suspend fun flushPopLogs(): Int {
         if (!sessionGuard.isPairedWithToken()) return 0
-        if (!popConfigManager.isPopEnabled()) {
-            PopTelemetryLogger.logSkipped("pop_disabled")
+        if (!popConfigManager.isUploadEnabled()) {
+            PopTelemetryLogger.logSkipped("upload_paused")
             return 0
         }
 
@@ -249,19 +301,22 @@ class TelemetryRepository @Inject constructor(
                 }
 
                 if (response.accepted == false && response.reason == POP_DISABLED_REASON) {
-                    popConfigManager.disablePermanently(POP_DISABLED_REASON)
-                    popLogDao.deleteUnsynced()
-                    PopTelemetryLogger.logQueueStatus(0)
-                    Log.w(TAG, "PoP disabled by CMS — cleared ${unsynced.size} queued log(s)")
+                    // Pause upload only — never wipe evidence.
+                    popConfigManager.pauseUpload(POP_DISABLED_REASON)
+                    popHealthTracker.recordError(POP_DISABLED_REASON)
+                    PopTelemetryLogger.logQueueStatus(popLogDao.getUnsyncedCount())
+                    Log.w(
+                        TAG,
+                        "PoP upload paused by CMS ($POP_DISABLED_REASON) — retaining ${unsynced.size} queued log(s)"
+                    )
                     break
                 }
 
                 if (response.accepted == false) {
-                    PopTelemetryLogger.logUploadFailed(
-                        unsynced.size,
-                        response.reason ?: "CMS accepted=false"
-                    )
-                    Log.w(TAG, "PoP flush rejected: reason=${response.reason}")
+                    val reason = response.reason ?: "CMS accepted=false"
+                    popHealthTracker.recordError(reason)
+                    PopTelemetryLogger.logUploadFailed(unsynced.size, reason)
+                    Log.w(TAG, "PoP flush rejected: reason=$reason")
                     break
                 }
 
@@ -271,20 +326,35 @@ class TelemetryRepository @Inject constructor(
                     if (storedId.isNullOrBlank()) {
                         securePrefs.cmsDeviceId = responseDeviceId
                     } else if (storedId != responseDeviceId) {
+                        // Authoritative CMS id wins — do not deadlock forever.
                         PopTelemetryLogger.logDeviceIdMismatch(storedId, responseDeviceId)
                         Log.e(
                             TAG,
-                            "PoP deviceId mismatch stored=$storedId response=$responseDeviceId tokenPrefix=$tokenPrefix"
+                            "PoP deviceId mismatch stored=$storedId response=$responseDeviceId — adopting CMS id"
                         )
-                        break
+                        securePrefs.cmsDeviceId = responseDeviceId
+                        popHealthTracker.recordError("device_id_mismatch_adopted:$responseDeviceId")
+                        runCatching {
+                            submitSystemLogs(
+                                category = "pop",
+                                message = "Adopted CMS deviceId after mismatch",
+                                metadata = mapOf(
+                                    "storedId" to storedId,
+                                    "responseDeviceId" to responseDeviceId,
+                                    "tokenPrefix" to tokenPrefix
+                                )
+                            )
+                        }
                     }
                 }
 
                 val received = response.received.coerceAtLeast(0)
                 if (received <= 0) {
+                    val reason = response.reason ?: "CMS received=0"
+                    popHealthTracker.recordError(reason)
                     PopTelemetryLogger.logUploadFailed(
                         attempted = unsynced.size,
-                        reason = response.reason ?: "CMS received=0"
+                        reason = reason
                     )
                     Log.w(TAG, "PoP flush rejected by CMS: received=0, keeping ${unsynced.size} queued")
                     break
@@ -296,6 +366,7 @@ class TelemetryRepository @Inject constructor(
                 popLogDao.deleteSynced()
                 totalSynced += confirmed.size
                 PopTelemetryLogger.logUploaded(confirmed.size)
+                popHealthTracker.recordUploaded(confirmed.size)
                 PopTelemetryLogger.logSubmitSuccess(
                     deviceId = response.deviceId,
                     deviceName = response.deviceName,
@@ -316,10 +387,12 @@ class TelemetryRepository @Inject constructor(
                 }
             } catch (e: HttpException) {
                 val errorBody = e.response()?.errorBody()?.string()
+                popHealthTracker.recordError("HTTP ${e.code()}")
                 PopTelemetryLogger.logUploadFailed(unsynced.size, "HTTP ${e.code()}")
                 Log.e(TAG, "PoP flush failed: HTTP ${e.code()} body=$errorBody", e)
                 break
             } catch (e: Exception) {
+                popHealthTracker.recordError(e.message ?: "unknown")
                 PopTelemetryLogger.logUploadFailed(unsynced.size, e.message ?: "unknown")
                 Log.e(TAG, "PoP flush failed: ${e.message}", e)
                 break
@@ -329,6 +402,10 @@ class TelemetryRepository @Inject constructor(
         PopTelemetryLogger.logQueueStatus(popLogDao.getUnsyncedCount())
         return totalSynced
     }
+
+    suspend fun popHealthSnapshot() =
+        popHealthTracker.snapshot(pendingCount = popLogDao.getUnsyncedCount())
+
 
     suspend fun flushAll() {
         flushQueuedHeartbeats()

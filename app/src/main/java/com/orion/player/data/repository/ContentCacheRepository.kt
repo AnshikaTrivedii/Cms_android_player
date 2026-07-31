@@ -60,7 +60,8 @@ class ContentCacheRepository @Inject constructor(
                 status = status,
                 downloadedAt = entity.downloadTimestamp.takeIf { it > 0L }
             )
-        }.sortedBy { it.position }
+        }
+        // roomAssets is already ordered by queueIndex (playback occurrence order).
 
         val playable = assets.count { it.status == CacheDownloadStatus.CACHED }
         val online = networkMonitor.isOnline

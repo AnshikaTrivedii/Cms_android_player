@@ -18,4 +18,7 @@ interface HeartbeatQueueDao {
 
     @Query("DELETE FROM queued_heartbeats WHERE isSynced = 1")
     suspend fun deleteSynced()
+
+    @Query("DELETE FROM queued_heartbeats")
+    suspend fun deleteAll()
 }

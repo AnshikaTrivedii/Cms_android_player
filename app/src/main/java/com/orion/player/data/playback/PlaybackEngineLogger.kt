@@ -114,12 +114,14 @@ object PlaybackEngineLogger {
         synced: List<com.orion.player.data.remote.AssetInfo>,
         playlistVersion: Int?
     ) {
-        val previousById = previous.associateBy { it.id }
-        synced.forEach { asset ->
-            val prior = previousById[asset.id] ?: return@forEach
+        val limit = minOf(previous.size, synced.size)
+        for (index in 0 until limit) {
+            val prior = previous[index]
+            val asset = synced[index]
+            if (prior.id != asset.id) continue
             if (prior.cmsDurationSeconds != asset.cmsDurationSeconds) {
                 logDurationReceivedFromSync(
-                    assetName = asset.name,
+                    assetName = "${asset.name}#${index + 1}",
                     oldDurationSec = prior.cmsDurationSeconds,
                     newDurationSec = asset.cmsDurationSeconds,
                     playlistVersion = playlistVersion

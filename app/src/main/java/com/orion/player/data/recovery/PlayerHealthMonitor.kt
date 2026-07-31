@@ -54,6 +54,9 @@ class PlayerHealthMonitor @Inject constructor() {
     @Volatile var currentQueueSize: Int = 0
         private set
 
+    @Volatile var lastPopGeneratedMs: Long = 0L
+        private set
+
     private var slotLoopAliveChecker: (() -> Boolean)? = null
 
     fun registerSlotLoopAliveChecker(checker: () -> Boolean) {
@@ -158,6 +161,26 @@ class PlayerHealthMonitor @Inject constructor() {
         return age > PlayerRuntimeConfig.VIDEO_RENDERER_STUCK_MS
     }
 
+    fun recordPopGenerated() {
+        lastPopGeneratedMs = System.currentTimeMillis()
+    }
+
+    fun lastPopGeneratedAgeMs(): Long {
+        if (lastPopGeneratedMs <= 0L) return Long.MAX_VALUE
+        return (System.currentTimeMillis() - lastPopGeneratedMs).coerceAtLeast(0L)
+    }
+
+    fun isPopGenerationStalled(): Boolean {
+        if (!isPlaybackExpected || !isPlaybackActive) return false
+        if (currentQueueSize <= 0) return false
+        // Allow a grace window after startup / first slot.
+        if (startupInitMs > 0L) {
+            val sinceStart = System.currentTimeMillis() - startupInitMs
+            if (sinceStart < PlayerRuntimeConfig.POP_STALL_TIMEOUT_MS) return false
+        }
+        return lastPopGeneratedAgeMs() > PlayerRuntimeConfig.POP_STALL_TIMEOUT_MS
+    }
+
     fun isPlaybackStuck(): Boolean {
         if (!isPlaybackExpected) return false
 
@@ -178,6 +201,10 @@ class PlayerHealthMonitor @Inject constructor() {
         }
 
         if (isVideoRendererStale()) {
+            return true
+        }
+
+        if (isPopGenerationStalled()) {
             return true
         }
 

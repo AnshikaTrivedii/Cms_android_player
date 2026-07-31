@@ -51,6 +51,14 @@ class SecurePrefs @Inject constructor(
         private const val KEY_INITIAL_DOWNLOAD_STARTED = "initial_download_started"
         private const val KEY_INITIAL_SYNC_TIMEOUT_SECONDS = "initial_sync_timeout_seconds"
         private const val KEY_PAIRING_BOOTSTRAP_PENDING = "pairing_bootstrap_pending"
+        private const val KEY_POP_UPLOAD_CONFIGURED = "pop_upload_configured"
+        private const val KEY_POP_UPLOAD_ENABLED = "pop_upload_enabled"
+        private const val KEY_POP_LAST_GENERATED_AT = "pop_last_generated_at"
+        private const val KEY_POP_LAST_UPLOADED_AT = "pop_last_uploaded_at"
+        private const val KEY_POP_LAST_ERROR = "pop_last_error"
+        private const val KEY_STRETCH_TO_FIT = "stretch_to_fit"
+        private const val KEY_DESIRED_ORIENTATION = "desired_orientation"
+        private const val KEY_DISPLAY_CONFIG_VERSION = "display_config_version"
     }
 
     /**
@@ -126,6 +134,20 @@ class SecurePrefs @Inject constructor(
         get() = prefs.getString(KEY_LAST_SUCCESSFUL_SYNC_AT, null)
         set(value) = prefs.edit().putString(KEY_LAST_SUCCESSFUL_SYNC_AT, value).apply()
 
+    /** CMS stretch-to-fit display setting. */
+    var stretchToFit: Boolean
+        get() = prefs.getBoolean(KEY_STRETCH_TO_FIT, false)
+        set(value) = prefs.edit().putBoolean(KEY_STRETCH_TO_FIT, value).apply()
+
+    /** CMS-desired orientation: LANDSCAPE or PORTRAIT. */
+    var desiredOrientation: String
+        get() = prefs.getString(KEY_DESIRED_ORIENTATION, "LANDSCAPE") ?: "LANDSCAPE"
+        set(value) = prefs.edit().putString(KEY_DESIRED_ORIENTATION, value).apply()
+
+    var displayConfigVersion: Int
+        get() = prefs.getInt(KEY_DISPLAY_CONFIG_VERSION, 0)
+        set(value) = prefs.edit().putInt(KEY_DISPLAY_CONFIG_VERSION, value).apply()
+
     /** Seconds between full /player/sync polls (server-configurable, default 120). */
     var syncIntervalSeconds: Int
         get() = prefs.getInt(KEY_SYNC_INTERVAL_SECONDS, SyncConfig.DEFAULT_SYNC_INTERVAL_SECONDS)
@@ -164,6 +186,28 @@ class SecurePrefs @Inject constructor(
         get() = prefs.getBoolean(KEY_PAIRING_BOOTSTRAP_PENDING, false)
         set(value) = prefs.edit().putBoolean(KEY_PAIRING_BOOTSTRAP_PENDING, value).apply()
 
+    /** True after the CMS (or pairing default) has set an upload preference. */
+    var popUploadConfigured: Boolean
+        get() = prefs.getBoolean(KEY_POP_UPLOAD_CONFIGURED, false)
+        set(value) = prefs.edit().putBoolean(KEY_POP_UPLOAD_CONFIGURED, value).apply()
+
+    /** When false, PoP is collected locally but not uploaded. */
+    var popUploadEnabled: Boolean
+        get() = prefs.getBoolean(KEY_POP_UPLOAD_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_POP_UPLOAD_ENABLED, value).apply()
+
+    var popLastGeneratedAt: String?
+        get() = prefs.getString(KEY_POP_LAST_GENERATED_AT, null)
+        set(value) = prefs.edit().putString(KEY_POP_LAST_GENERATED_AT, value).apply()
+
+    var popLastUploadedAt: String?
+        get() = prefs.getString(KEY_POP_LAST_UPLOADED_AT, null)
+        set(value) = prefs.edit().putString(KEY_POP_LAST_UPLOADED_AT, value).apply()
+
+    var popLastError: String?
+        get() = prefs.getString(KEY_POP_LAST_ERROR, null)
+        set(value) = prefs.edit().putString(KEY_POP_LAST_ERROR, value).apply()
+
     fun isAuthenticated(): Boolean =
         isPaired && !deviceToken.isNullOrBlank()
 
@@ -185,6 +229,8 @@ class SecurePrefs @Inject constructor(
             .putLong(KEY_PAIRED_AT_MS, now)
             .putBoolean(KEY_INITIAL_DOWNLOAD_STARTED, false)
             .putBoolean(KEY_PAIRING_BOOTSTRAP_PENDING, true)
+            .putBoolean(KEY_POP_UPLOAD_CONFIGURED, true)
+            .putBoolean(KEY_POP_UPLOAD_ENABLED, true)
             .remove(KEY_CMS_DEVICE_ID)
             .apply()
     }
@@ -206,6 +252,11 @@ class SecurePrefs @Inject constructor(
             .remove(KEY_LAST_STORED_REVISION)
             .remove(KEY_LAST_STORED_PLAYLIST_ID)
             .remove(KEY_LAST_STORED_LAYOUT_ID)
+            .remove(KEY_POP_UPLOAD_CONFIGURED)
+            .remove(KEY_POP_UPLOAD_ENABLED)
+            .remove(KEY_POP_LAST_GENERATED_AT)
+            .remove(KEY_POP_LAST_UPLOADED_AT)
+            .remove(KEY_POP_LAST_ERROR)
             .putBoolean(KEY_IS_PAIRED, false)
         if (hardwareId.isNotBlank()) {
             editor.remove(deviceTokenKey(hardwareId))

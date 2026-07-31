@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -160,7 +160,7 @@ private fun CacheDebugContent(info: CacheDebugInfo) {
                 )
             }
         } else {
-            items(info.assets, key = { it.assetId }) { asset ->
+            itemsIndexed(info.assets, key = { index, asset -> "q$index-${asset.assetId}" }) { _, asset ->
                 AssetCard(asset)
             }
         }

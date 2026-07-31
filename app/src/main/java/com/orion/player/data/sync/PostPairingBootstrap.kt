@@ -1,12 +1,13 @@
 package com.orion.player.data.sync
 
+import android.content.Context
 import android.util.Log
+import com.orion.player.data.analytics.PopConfigManager
 import com.orion.player.data.analytics.PopLogFlushScheduler
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.telemetry.DeviceHeartbeatScheduler
 import com.orion.player.service.PlayerForegroundService
 import dagger.hilt.android.qualifiers.ApplicationContext
-import android.content.Context
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -18,6 +19,7 @@ import javax.inject.Singleton
 class PostPairingBootstrap @Inject constructor(
     @ApplicationContext private val context: Context,
     private val securePrefs: SecurePrefs,
+    private val popConfigManager: PopConfigManager,
     private val heartbeatScheduler: DeviceHeartbeatScheduler,
     private val contentSyncScheduler: ContentSyncScheduler,
     private val popLogFlushScheduler: PopLogFlushScheduler,
@@ -27,6 +29,7 @@ class PostPairingBootstrap @Inject constructor(
         if (!securePrefs.isAuthenticated()) return
 
         Log.i(TAG, "Bootstrapping paired device tokenPrefix=${securePrefs.deviceTokenPrefix()}")
+        popConfigManager.markPairedDefaultUploadEnabled()
         PlayerForegroundService.start(context)
 
         initialSyncCoordinator.onPairingCompleted()

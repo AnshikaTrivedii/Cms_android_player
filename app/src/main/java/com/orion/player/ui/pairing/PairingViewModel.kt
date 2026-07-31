@@ -3,6 +3,7 @@ package com.orion.player.ui.pairing
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.orion.player.data.registration.DeviceRegistrationManager
 import com.orion.player.data.repository.PairingRepository
 import com.orion.player.util.ApiErrorParser.readableMessage
 import com.orion.player.util.NetworkDiagnostics
@@ -18,7 +19,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class PairingViewModel @Inject constructor(
-    private val pairingRepository: PairingRepository
+    private val pairingRepository: PairingRepository,
+    private val deviceRegistrationManager: DeviceRegistrationManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<PairingUiState>(PairingUiState.Loading)
@@ -28,6 +30,7 @@ class PairingViewModel @Inject constructor(
     private var pairingJob: Job? = null
 
     init {
+        deviceRegistrationManager.markPairingScreenDisplayed()
         startPairing()
     }
 
@@ -38,6 +41,7 @@ class PairingViewModel @Inject constructor(
                 _uiState.value = PairingUiState.Loading
                 hardwareId = pairingRepository.getHardwareId()
                 Log.d(TAG, "startPairing hardwareId=$hardwareId")
+                deviceRegistrationManager.markNewPairingStarted()
 
                 if (pairingRepository.isAlreadyPaired()) {
                     _uiState.value = PairingUiState.Paired
@@ -68,6 +72,7 @@ class PairingViewModel @Inject constructor(
 
                 Log.d(TAG, "Showing pairing code=$code")
                 _uiState.value = PairingUiState.ShowCode(code)
+                deviceRegistrationManager.markPairingScreenDisplayed()
 
                 pairingRepository.pollPairingStatus(hardwareId, pairingSecret)
                     .catch { e ->

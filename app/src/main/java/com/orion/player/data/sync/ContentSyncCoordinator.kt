@@ -23,6 +23,9 @@ import com.orion.player.data.repository.CacheReportRepository
 import com.orion.player.data.repository.ContentRepository
 import com.orion.player.data.repository.ContentCacheRepository
 import com.orion.player.data.repository.PlaylistCacheRepository
+import com.orion.player.data.registration.DeviceRegistrationManager
+import com.orion.player.data.registration.DeviceRegistrationStatusParser
+import com.orion.player.data.config.DeviceConfigManager
 import com.orion.player.data.ticker.TickerDisplayConfig
 import com.orion.player.data.ticker.TickerLogger
 import com.orion.player.data.ticker.resolveActiveTickers
@@ -95,7 +98,9 @@ class ContentSyncCoordinator @Inject constructor(
     private val syncIntervalConfig: SyncIntervalConfig,
     private val revisionPollIntervalConfig: RevisionPollIntervalConfig,
     private val syncStateStore: SyncStateStore,
-    private val initialSyncCoordinator: InitialSyncCoordinator
+    private val initialSyncCoordinator: InitialSyncCoordinator,
+    private val deviceRegistrationManager: DeviceRegistrationManager,
+    private val deviceConfigManager: DeviceConfigManager
 ) {
     companion object {
         private const val TAG = "OrionSync"
@@ -157,6 +162,15 @@ class ContentSyncCoordinator @Inject constructor(
 
         return try {
             val response = contentRepository.getSyncRevision()
+            deviceRegistrationManager.handleStatus(
+                DeviceRegistrationStatusParser.fromSuccessField(response.deviceStatus)
+            )
+            deviceConfigManager.applyFromServer(
+                configVersion = response.configVersion,
+                stretchToFit = response.stretchToFit,
+                orientation = response.orientation,
+                display = response.display
+            )
             revisionEndpointAvailable = true
             revisionPollIntervalConfig.updateInterval(response.revisionPollIntervalSeconds)
             syncIntervalConfig.updateInterval(response.syncIntervalSeconds)
@@ -197,7 +211,13 @@ class ContentSyncCoordinator @Inject constructor(
             }
         } catch (e: HttpException) {
             when (e.code()) {
-                401 -> RevisionPollOutcome(shouldSync = false, reason = "unpaired")
+                401 -> {
+                    val body = runCatching { e.response()?.errorBody()?.string() }.getOrNull()
+                    deviceRegistrationManager.handleStatus(
+                        DeviceRegistrationStatusParser.fromUnauthorized(body, e.message())
+                    )
+                    RevisionPollOutcome(shouldSync = false, reason = "unpaired")
+                }
                 404 -> {
                     revisionEndpointAvailable = false
                     RevisionPollOutcome(shouldSync = false, reason = "unavailable")
@@ -278,6 +298,15 @@ class ContentSyncCoordinator @Inject constructor(
                 "sync_response unchanged=${syncResponse.unchanged} pendingDownloadCount=${syncResponse.pendingDownloadCount ?: 0} " +
                     "removed=${syncResponse.resolvedRemovedAssetIds().size}"
             )
+            deviceRegistrationManager.handleStatus(
+                DeviceRegistrationStatusParser.fromSuccessField(syncResponse.deviceStatus)
+            )
+            deviceConfigManager.applyFromServer(
+                configVersion = syncResponse.configVersion,
+                stretchToFit = syncResponse.stretchToFit,
+                orientation = syncResponse.orientation,
+                display = syncResponse.display
+            )
             popConfigManager.update(syncResponse.popLogsExpected, syncResponse.features)
             syncIntervalConfig.updateInterval(syncResponse.syncIntervalSeconds)
             revisionPollIntervalConfig.updateInterval(syncResponse.revisionPollIntervalSeconds)
@@ -303,8 +332,13 @@ class ContentSyncCoordinator @Inject constructor(
             return dispatchSyncResponse(syncResponse, cachedSnapshot, force, onDownloadProgress)
                 .withSuccessfulSyncTimestamp()
         } catch (e: HttpException) {
-            if (e.code() == 401) SyncOutcome.Unpaired
-            else {
+            if (e.code() == 401) {
+                val body = runCatching { e.response()?.errorBody()?.string() }.getOrNull()
+                deviceRegistrationManager.handleStatus(
+                    DeviceRegistrationStatusParser.fromUnauthorized(body, e.message())
+                )
+                SyncOutcome.Unpaired
+            } else {
                 val message = NetworkDiagnostics.userMessage("GET /player/sync", e)
                 SyncDiagnostics.logSyncFailed(message, e)
                 fallbackOrFail(current = current, message = message)

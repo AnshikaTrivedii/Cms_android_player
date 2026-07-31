@@ -1,6 +1,7 @@
 package com.orion.player
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.View
 import android.view.WindowInsets
@@ -10,6 +11,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import com.orion.player.data.config.DeviceConfigManager
+import com.orion.player.data.config.DisplayOrientation
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.recovery.OrionRecoveryLogger
 import com.orion.player.data.recovery.PlayerHealthMonitor
@@ -19,6 +25,7 @@ import com.orion.player.ui.navigation.OrionNavGraph
 import com.orion.player.ui.navigation.Routes
 import com.orion.player.ui.theme.OrionPlayerTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -30,6 +37,7 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var securePrefs: SecurePrefs
     @Inject lateinit var healthMonitor: PlayerHealthMonitor
+    @Inject lateinit var deviceConfigManager: DeviceConfigManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,7 +53,16 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         enableEdgeToEdge()
         setupImmersiveMode()
+        applyDisplayOrientation(deviceConfigManager.orientation.value)
         PlayerForegroundService.start(this)
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                deviceConfigManager.orientation.collect { orientation ->
+                    applyDisplayOrientation(orientation)
+                }
+            }
+        }
 
         val startDestination = if (securePrefs.isAuthenticated()) {
             Routes.PLAYBACK
@@ -74,6 +91,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         setupImmersiveMode()
         applyKioskModeIfEnabled()
+        applyDisplayOrientation(deviceConfigManager.orientation.value)
     }
 
     override fun onUserLeaveHint() {
@@ -88,6 +106,17 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         intent.getStringExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE)?.let { source ->
             OrionRecoveryLogger.logPlayerStarted(source)
+        }
+    }
+
+    private fun applyDisplayOrientation(orientation: DisplayOrientation) {
+        val target = when (orientation) {
+            DisplayOrientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            DisplayOrientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
+        if (requestedOrientation != target) {
+            OrionRecoveryLogger.logPlayerStarted("orientation.${orientation.name.lowercase()}")
+            requestedOrientation = target
         }
     }
 

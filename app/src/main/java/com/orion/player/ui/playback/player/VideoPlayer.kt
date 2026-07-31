@@ -19,6 +19,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.orion.player.R
+import com.orion.player.ui.playback.LocalStretchToFit
 import java.io.File
 
 /**
@@ -40,6 +41,7 @@ fun VideoPlayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val stretchToFit = LocalStretchToFit.current
 
     val exoPlayer = remember(file.absolutePath, playbackSessionKey) {
         var readySignaled = false
@@ -48,7 +50,11 @@ fun VideoPlayer(
             setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
             playWhenReady = true
             repeatMode = Player.REPEAT_MODE_OFF
-            videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+            videoScalingMode = if (stretchToFit) {
+                C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+            } else {
+                C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+            }
 
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -92,6 +98,14 @@ fun VideoPlayer(
             })
 
             prepare()
+        }
+    }
+
+    LaunchedEffect(stretchToFit) {
+        exoPlayer.videoScalingMode = if (stretchToFit) {
+            C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+        } else {
+            C.VIDEO_SCALING_MODE_SCALE_TO_FIT
         }
     }
 

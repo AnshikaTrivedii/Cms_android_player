@@ -62,18 +62,18 @@ object PlaylistChangeDetector {
             localPlaylist.id == remotePlaylist.id &&
             localPlaylist.name != remotePlaylist.name
 
-        val requiresDownload = added.isNotEmpty() ||
-            removed.isNotEmpty() ||
-            remoteAssets.any { remote ->
-                val local = localAssets.find { it.id == remote.id } ?: return@any true
+        val requiresDownload = remoteAssets.map { it.id }.toSet().any { assetId ->
+            val remote = remoteAssets.first { it.id == assetId }
+            val local = localAssets.firstOrNull { it.id == assetId }
+            when {
+                local == null -> true
                 remote.assetVersion != null &&
                     local.assetVersion != null &&
-                    remote.assetVersion != local.assetVersion
-            } ||
-            remoteAssets.any { remote ->
-                val local = localAssets.find { it.id == remote.id } ?: return@any false
-                remote.fileSize > 0 && local.fileSize > 0 && remote.fileSize != local.fileSize
+                    remote.assetVersion != local.assetVersion -> true
+                remote.fileSize > 0 && local.fileSize > 0 && remote.fileSize != local.fileSize -> true
+                else -> false
             }
+        } || added.isNotEmpty() || removed.isNotEmpty()
 
         val requiresQueueRebuild = orderChanged ||
             metadataChanged ||

@@ -4,10 +4,13 @@ import com.orion.player.util.UrlSecurityUtil
 
 /**
  * Normalized asset types returned by /player/sync.
+ * Supported playlist types: IMAGE, VIDEO, URL, DOCUMENT.
+ * HTML is retained only so legacy manifests parse without crashing.
  */
 object AssetType {
     const val IMAGE = "IMAGE"
     const val VIDEO = "VIDEO"
+    @Deprecated("HTML assets are no longer supported")
     const val HTML = "HTML"
     const val DOCUMENT = "DOCUMENT"
     const val URL = "URL"
@@ -19,6 +22,7 @@ object AssetType {
 
     fun AssetInfo.requiresDownload(): Boolean = when (normalizedType()) {
         URL -> remoteSourceUrl() != null
+        HTML -> false
         else -> true
     }
 
@@ -34,6 +38,7 @@ object AssetType {
                 (file != null && file.exists() && file.length() > 0L) ||
                     remoteSourceUrl() != null
             }
+            HTML -> false
             else -> {
                 val file = localFiles[id] ?: return false
                 file.exists() && file.length() > 0L
@@ -41,9 +46,9 @@ object AssetType {
         }
     }
 
-    /** VIDEO/HTML/URL/DOCUMENT start PoP when content is actually ready, not at slot assignment. */
+    /** VIDEO/URL/DOCUMENT start PoP when content is actually ready, not at slot assignment. */
     fun AssetInfo.deferPopStartUntilReady(): Boolean =
-        normalizedType() in setOf(VIDEO, HTML, URL, DOCUMENT)
+        normalizedType() in setOf(VIDEO, URL, DOCUMENT)
 
     /**
      * Whether the playlist manifest changed (order, duration, asset version, etc.).
@@ -69,11 +74,10 @@ object AssetType {
 
     fun List<AssetInfo>.playlistManifestChangedFrom(previous: List<AssetInfo>): Boolean {
         if (size != previous.size) return true
-        if (map { it.id } != previous.map { it.id }) return true
-        val previousById = previous.associateBy { it.id }
-        return any { asset ->
-            val prior = previousById[asset.id] ?: return@any true
-            !asset.playlistManifestEquals(prior)
+        // Compare occurrence-by-occurrence so duplicate asset ids with different
+        // durations/positions are detected correctly.
+        return indices.any { index ->
+            !this[index].playlistManifestEquals(previous[index])
         }
     }
 }

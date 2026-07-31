@@ -86,6 +86,6 @@ class DeviceHeartbeatScheduler @Inject constructor(
     }
 
     companion object {
-        const val DEFAULT_INTERVAL_MS = 60_000L
+        const val DEFAULT_INTERVAL_MS = 30_000L
     }
 }

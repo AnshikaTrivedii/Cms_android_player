@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
+import com.orion.player.ui.playback.LocalStretchToFit
 import java.io.File
 
 /**
@@ -25,6 +26,7 @@ fun ImagePlayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val stretchToFit = LocalStretchToFit.current
     val model = file ?: url ?: return
     val request = ImageRequest.Builder(context)
         .data(model)
@@ -41,7 +43,7 @@ fun ImagePlayer(
         AsyncImage(
             model = request,
             contentDescription = "Digital signage content",
-            contentScale = ContentScale.Fit,
+            contentScale = if (stretchToFit) ContentScale.Crop else ContentScale.Fit,
             modifier = Modifier.fillMaxSize()
         )
     }

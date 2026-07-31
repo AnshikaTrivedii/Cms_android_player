@@ -47,6 +47,7 @@ fun PlaybackScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val isUnpaired by viewModel.isUnpaired.collectAsState()
+    val stretchToFit by viewModel.stretchToFit.collectAsState()
     var debugTapCount by remember { mutableIntStateOf(0) }
     val activity = LocalContext.current as? ComponentActivity
 
@@ -68,6 +69,7 @@ fun PlaybackScreen(
         }
     }
 
+    androidx.compose.runtime.CompositionLocalProvider(LocalStretchToFit provides stretchToFit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -120,6 +122,7 @@ fun PlaybackScreen(
                 onRetry = { viewModel.retry() }
             )
         }
+    }
     }
 }
 

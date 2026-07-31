@@ -25,6 +25,9 @@ object PlayerRuntimeConfig {
     /** No video renderer pulse for this long during video playback → stuck. */
     const val VIDEO_RENDERER_STUCK_MS = 60_000L
 
+    /** No Proof-of-Play generated while playback is expected for this long → stall. */
+    const val POP_STALL_TIMEOUT_MS = 600_000L
+
     /** Log memory usage every N watchdog checks (30s each). 20 = ~10 minutes. */
     const val MEMORY_LOG_EVERY_N_CHECKS = 20
 

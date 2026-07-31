@@ -195,9 +195,11 @@ class ContentRepository @Inject constructor(
         onProgress: ((completed: Int, total: Int) -> Unit)? = null
     ): Map<String, File> = coroutineScope {
         val result = mutableMapOf<String, File>()
-        val downloadableAssets = assets.filter { asset ->
-            asset.requiresDownload && asset.available && asset.assetTypeRequiresDownload() && !isAssetCached(asset)
-        }
+        val downloadableAssets = assets
+            .filter { asset ->
+                asset.requiresDownload && asset.available && asset.assetTypeRequiresDownload() && !isAssetCached(asset)
+            }
+            .distinctBy { it.id }
 
         if (downloadableAssets.isEmpty()) {
             if (assets.isNotEmpty()) onProgress?.invoke(1, 1)
@@ -260,7 +262,6 @@ class ContentRepository @Inject constructor(
 
     private fun AssetInfo.fileExtension(): String = when (normalizedType()) {
         AssetType.URL -> "html"
-        AssetType.HTML -> DocumentFormat.htmlExtension(this)
         AssetType.DOCUMENT -> DocumentFormat.extensionFor(this)
         AssetType.VIDEO -> when {
             mimeType.contains("webm", ignoreCase = true) -> "webm"

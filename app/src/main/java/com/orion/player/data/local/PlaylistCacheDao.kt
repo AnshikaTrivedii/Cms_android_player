@@ -18,14 +18,14 @@ interface PlaylistCacheDao {
     @Query("SELECT * FROM cached_playlist WHERE id = 1 LIMIT 1")
     suspend fun getPlaylist(): CachedPlaylistEntity?
 
-    @Query("SELECT * FROM cached_assets ORDER BY position ASC")
+    @Query("SELECT * FROM cached_assets ORDER BY queueIndex ASC")
     suspend fun getAssets(): List<CachedAssetEntity>
-
-    @Query("DELETE FROM cached_assets WHERE assetId NOT IN (:assetIds)")
-    suspend fun deleteAssetsNotIn(assetIds: List<String>)
 
     @Query("DELETE FROM cached_assets")
     suspend fun clearAssets()
+
+    @Query("DELETE FROM cached_playlist")
+    suspend fun clearPlaylist()
 
     @Query("SELECT COUNT(*) FROM cached_assets WHERE localFilePath IS NOT NULL")
     suspend fun getCachedAssetCount(): Int
@@ -53,11 +53,8 @@ interface PlaylistCacheDao {
         assets: List<CachedAssetEntity>
     ) {
         upsertPlaylist(playlist)
-        val assetIds = assets.map { it.assetId }
-        if (assetIds.isEmpty()) {
-            clearAssets()
-        } else {
-            deleteAssetsNotIn(assetIds)
+        clearAssets()
+        if (assets.isNotEmpty()) {
             upsertAssets(assets)
         }
     }

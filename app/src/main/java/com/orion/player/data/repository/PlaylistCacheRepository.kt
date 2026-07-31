@@ -129,24 +129,26 @@ class PlaylistCacheRepository @Inject constructor(
         }
 
         val orderedAssets = snapshot.playlistAssets.ifEmpty { snapshot.assets }.inPlaylistOrder()
-        val previousDurations = playlistCacheDao.getAssets().associate { it.assetId to it.durationSeconds }
+        val previousByIndex = playlistCacheDao.getAssets().associate { it.queueIndex to it.durationSeconds }
 
         playlistCacheDao.replaceAll(
             playlist = entity,
-            assets = orderedAssets.map { asset ->
+            assets = orderedAssets.mapIndexed { queueIndex, asset ->
                 val localFile = snapshot.localFiles[asset.id]
                 // Videos without CMS duration must stay 0 so hasExplicitDuration() is false
                 // after cache reload (otherwise default 10s truncates playback).
                 val durationToStore = asset.cmsDurationSeconds
                     ?: if (asset.type.equals("VIDEO", ignoreCase = true)) 0 else asset.durationSeconds
-                previousDurations[asset.id]?.takeIf { it != durationToStore }?.let { oldDuration ->
+                previousByIndex[queueIndex]?.takeIf { it != durationToStore }?.let { oldDuration ->
                     Log.i(
                         TAG,
-                        "Cache duration updated: asset=${asset.name} oldSec=$oldDuration " +
-                            "newSec=$durationToStore version=${snapshot.playlistVersion ?: "none"}"
+                        "Cache duration updated: queueIndex=$queueIndex asset=${asset.name} " +
+                            "oldSec=$oldDuration newSec=$durationToStore " +
+                            "version=${snapshot.playlistVersion ?: "none"}"
                     )
                 }
                 CachedAssetEntity(
+                    queueIndex = queueIndex,
                     assetId = asset.id,
                     assetName = asset.name,
                     assetType = asset.type,
@@ -220,7 +222,9 @@ class PlaylistCacheRepository @Inject constructor(
         val cachedAssets = playlistCacheDao.getAssets()
         if (cachedAssets.isEmpty()) return null
 
-        val assets = cachedAssets.map { it.toAssetInfo() }.inPlaylistOrder()
+        val assets = cachedAssets
+            .sortedBy { it.queueIndex }
+            .map { it.toAssetInfo() }
         val localFiles = buildLocalFilesFromCache(cachedAssets)
 
         return when (cachedPlaylist.playbackMode) {

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.orion.player.data.analytics.PlaybackSession
 import com.orion.player.data.analytics.PopLogRecord
 import com.orion.player.data.analytics.PopSessionLogger
+import com.orion.player.data.analytics.PopSessionRecorder
 import com.orion.player.data.cache.CacheDownloadLogger
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.recovery.OrionRecoveryLogger
@@ -26,6 +27,9 @@ import com.orion.player.data.remote.AssetType.playlistManifestChangedFrom
 import com.orion.player.data.enterprise.DeviceLogCollector
 import com.orion.player.data.enterprise.RemoteCommandExecutor
 import com.orion.player.data.remote.HeartbeatResponse
+import com.orion.player.data.analytics.PopLogFlushScheduler
+import com.orion.player.data.config.DeviceConfigManager
+import com.orion.player.data.registration.DeviceRegistrationManager
 import com.orion.player.data.repository.TelemetryRepository
 import com.orion.player.data.telemetry.DeviceHeartbeatScheduler
 import com.orion.player.data.sync.ContentSyncCoordinator
@@ -62,6 +66,7 @@ class PlaybackViewModel @Inject constructor(
     private val contentSyncCoordinator: ContentSyncCoordinator,
     private val playerEventStreamClient: PlayerEventStreamClient,
     private val telemetryRepository: TelemetryRepository,
+    private val popSessionRecorder: PopSessionRecorder,
     private val networkMonitor: NetworkMonitor,
     private val securePrefs: SecurePrefs,
     private val healthMonitor: PlayerHealthMonitor,
@@ -72,7 +77,10 @@ class PlaybackViewModel @Inject constructor(
     private val contentSyncScheduler: ContentSyncScheduler,
     private val revisionPollScheduler: RevisionPollScheduler,
     private val initialSyncCoordinator: InitialSyncCoordinator,
-    private val postPairingBootstrap: PostPairingBootstrap
+    private val postPairingBootstrap: PostPairingBootstrap,
+    private val deviceRegistrationManager: DeviceRegistrationManager,
+    private val popLogFlushScheduler: PopLogFlushScheduler,
+    private val deviceConfigManager: DeviceConfigManager
 ) : ViewModel() {
 
     companion object {
@@ -109,12 +117,24 @@ class PlaybackViewModel @Inject constructor(
     private val _isUnpaired = MutableStateFlow(false)
     val isUnpaired: StateFlow<Boolean> = _isUnpaired.asStateFlow()
 
+    val stretchToFit: StateFlow<Boolean> = deviceConfigManager.stretchToFit
+
     init {
         healthMonitor.recordStartupInit()
         healthMonitor.registerSlotLoopAliveChecker { advanceJob?.isActive == true }
         viewModelScope.launch {
             heartbeatScheduler.responses.collect { response ->
                 handleHeartbeatResponse(response)
+            }
+        }
+        viewModelScope.launch {
+            deviceRegistrationManager.registrationEvents.collect {
+                handleRegistrationInvalidated()
+            }
+        }
+        viewModelScope.launch {
+            deviceRegistrationManager.requiresPairing.collect { needsPairing ->
+                if (needsPairing) handleRegistrationInvalidated()
             }
         }
         recoveryCoordinator.registerPlaybackRestartHandler { reason ->
@@ -241,6 +261,7 @@ class PlaybackViewModel @Inject constructor(
                 is SyncOutcome.Updated -> {
                     applySnapshotIfPlayable(outcome.snapshot, outcome.structureChanged)
                     telemetryRepository.flushAll()
+                    reportSuccessfulSyncToCms()
                 }
                 is SyncOutcome.Unchanged -> {
                     if (!isDisplayingContent()) {
@@ -253,6 +274,7 @@ class PlaybackViewModel @Inject constructor(
                             _uiState.value = PlaybackUiState.WaitingForInitialDownload(reason)
                         }
                     }
+                    reportSuccessfulSyncToCms()
                 }
                 is SyncOutcome.Downloading -> Unit
             }
@@ -360,6 +382,7 @@ class PlaybackViewModel @Inject constructor(
                         displayingContent = isDisplayingContent(),
                         staged = pendingSnapshot != null
                     )
+                    reportSuccessfulSyncToCms()
                 }
                 is SyncOutcome.Failed -> {
                     PlaybackEngineLogger.logSyncCompleted(
@@ -379,10 +402,15 @@ class PlaybackViewModel @Inject constructor(
                         displayingContent = isDisplayingContent(),
                         staged = pendingSnapshot != null
                     )
+                    reportSuccessfulSyncToCms()
                 }
                 is SyncOutcome.Downloading -> Unit
             }
         }
+    }
+
+    private suspend fun reportSuccessfulSyncToCms() {
+        runCatching { heartbeatScheduler.sendHeartbeatNow() }
     }
 
     private fun isDisplayingContent(): Boolean =
@@ -419,13 +447,22 @@ class PlaybackViewModel @Inject constructor(
 
     private fun stagePendingSnapshot(snapshot: PlaybackSnapshot, reason: String) {
         val normalized = normalizedSnapshot(snapshot)
-        val currentAssetId = playlistAssets.getOrNull(_currentAssetIndex.value)?.id
+        val currentIndex = _currentAssetIndex.value
+        val currentAssetId = playlistAssets.getOrNull(currentIndex)?.id
+        val newIds = normalized.playlistAssets.map { it.id }
+        val oldIds = playlistAssets.map { it.id }
         val resolvedIndex = when {
+            // Same multiset order (including duplicates) — keep the exact slot.
+            oldIds == newIds ->
+                currentIndex.coerceIn(0, (newIds.size - 1).coerceAtLeast(0))
+            currentAssetId != null &&
+                normalized.playlistAssets.getOrNull(currentIndex)?.id == currentAssetId ->
+                currentIndex
             currentAssetId != null -> {
                 val idxInNew = normalized.playlistAssets.indexOfFirst { it.id == currentAssetId }
                 if (idxInNew >= 0) idxInNew else 0
             }
-            else -> _currentAssetIndex.value.coerceIn(
+            else -> currentIndex.coerceIn(
                 0,
                 (normalized.playlistAssets.size - 1).coerceAtLeast(0)
             )
@@ -534,17 +571,22 @@ class PlaybackViewModel @Inject constructor(
     /** Apply latest CMS metadata (duration, name, etc.) without reordering the active queue. */
     private fun mergePlaylistMetadataInPlace(syncedAssets: List<AssetInfo>) {
         if (playlistAssets.isEmpty()) return
-        val syncedById = syncedAssets.associateBy { it.id }
-        playlistAssets = playlistAssets.map { current ->
-            val synced = syncedById[current.id] ?: return@map current
-            if (current.cmsDurationSeconds != synced.cmsDurationSeconds) {
-                PlaybackEngineLogger.logDurationMergedInMemory(
-                    assetName = current.name,
-                    oldDurationSec = current.cmsDurationSeconds,
-                    newDurationSec = synced.cmsDurationSeconds
-                )
+        val syncedOrdered = syncedAssets.inPlaylistOrder()
+        playlistAssets = playlistAssets.mapIndexed { index, current ->
+            val synced = syncedOrdered.getOrNull(index)
+            // Match by queue index + asset id so duplicate ids keep per-occurrence durations.
+            if (synced != null && synced.id == current.id) {
+                if (current.cmsDurationSeconds != synced.cmsDurationSeconds) {
+                    PlaybackEngineLogger.logDurationMergedInMemory(
+                        assetName = current.name,
+                        oldDurationSec = current.cmsDurationSeconds,
+                        newDurationSec = synced.cmsDurationSeconds
+                    )
+                }
+                synced
+            } else {
+                current
             }
-            synced
         }
         assets = playlistAssets
     }
@@ -599,12 +641,12 @@ class PlaybackViewModel @Inject constructor(
             AssetType.VIDEO -> {
                 healthMonitor.recordVideoSlotActive(true)
                 try {
-                    playVideoSlot(asset, configuredMs)
+                    playVideoSlot(queueIndex = index, asset = asset, configuredMs = configuredMs)
                 } finally {
                     healthMonitor.recordVideoSlotActive(false)
                 }
             }
-            else -> playTimedSlot(asset, configuredMs)
+            else -> playTimedSlot(queueIndex = index, asset = asset, configuredMs = configuredMs)
         }
 
         if (abortSlotForGeneration(generation, played = true, result = result, slotStart = slotStart)) return
@@ -655,23 +697,24 @@ class PlaybackViewModel @Inject constructor(
         return Duration.between(start, end).seconds.toInt().coerceAtLeast(1)
     }
 
-    private suspend fun playTimedSlot(asset: AssetInfo, configuredMs: Long): String {
+    private suspend fun playTimedSlot(queueIndex: Int, asset: AssetInfo, configuredMs: Long): String {
         if (asset.deferPopStartUntilReady()) {
             if (!awaitContentReady(asset.name)) return "FAILED"
         }
         val startTime = activePopSession?.contentReadyTime ?: Instant.now()
-        waitForConfiguredDuration(asset.id, startTime)
+        waitForConfiguredDuration(queueIndex, startTime)
         return "VERIFIED"
     }
 
-    private suspend fun playVideoSlot(asset: AssetInfo, configuredMs: Long): String {
+    private suspend fun playVideoSlot(queueIndex: Int, asset: AssetInfo, configuredMs: Long): String {
         if (asset.deferPopStartUntilReady()) {
             if (!awaitContentReady(asset.name)) return "FAILED"
         }
-        val latest = playlistAssets.find { it.id == asset.id } ?: asset
+        // Always use this queue index — never find-by-id (duplicates share ids).
+        val latest = playlistAssets.getOrNull(queueIndex) ?: asset
         return if (latest.hasExplicitDuration()) {
             val startTime = activePopSession?.contentReadyTime ?: Instant.now()
-            waitForConfiguredDuration(asset.id, startTime)
+            waitForConfiguredDuration(queueIndex, startTime)
             videoStopToken++
             emitFullScreen()
             delay(150L)
@@ -693,10 +736,11 @@ class PlaybackViewModel @Inject constructor(
 
     /**
      * Polls the live queue so CMS duration updates apply mid-slot without restarting playback.
+     * Looks up by queue index so duplicate asset ids keep independent durations.
      */
-    private suspend fun waitForConfiguredDuration(assetId: String, startTime: Instant) {
+    private suspend fun waitForConfiguredDuration(queueIndex: Int, startTime: Instant) {
         while (true) {
-            val asset = playlistAssets.find { it.id == assetId } ?: return
+            val asset = playlistAssets.getOrNull(queueIndex) ?: return
             val targetMs = asset.playbackSlotDurationMs()
             val elapsed = Duration.between(startTime, Instant.now()).toMillis()
             if (elapsed >= targetMs) {
@@ -817,6 +861,7 @@ class PlaybackViewModel @Inject constructor(
             activePopSession = null
         }
         queuePopLog(record)
+        healthMonitor.recordPopGenerated()
     }
 
     private fun commitPendingQueueSwap(): Boolean {
@@ -911,8 +956,29 @@ class PlaybackViewModel @Inject constructor(
     }
 
     private fun handleUnpaired() {
-        securePrefs.clearCredentials()
+        // Session clear already performed by DeviceRegistrationManager on 401.
+        handleRegistrationInvalidated()
+    }
+
+    private fun handleRegistrationInvalidated() {
+        if (_isUnpaired.value) return
+        stopBackgroundServices()
+        slotGeneration++
+        advanceJob?.cancel()
+        clearPlaybackState()
+        pendingSnapshot = null
+        activePopSession = null
+        healthMonitor.recordPlaybackExpected(false)
         _isUnpaired.value = true
+    }
+
+    private fun stopBackgroundServices() {
+        backgroundServicesStarted = false
+        heartbeatScheduler.stop()
+        contentSyncScheduler.stop()
+        revisionPollScheduler.stop()
+        popLogFlushScheduler.stop()
+        playerEventStreamClient.stop()
     }
 
     private fun deviceDisplayName(): String =
@@ -989,14 +1055,17 @@ fun onUrlLoadFailed(assetName: String) {
             is SyncOutcome.Updated -> {
                 applySnapshotIfPlayable(outcome.snapshot, outcome.structureChanged)
                 telemetryRepository.flushAll()
+                reportSuccessfulSyncToCms()
                 snapshotIsPlayable(outcome.snapshot) || isDisplayingContent()
             }
             is SyncOutcome.Unchanged -> {
                 val fallback = contentSyncCoordinator.loadCachedSnapshot()
                 if (!isDisplayingContent() && fallback != null && snapshotIsPlayable(fallback)) {
                     applySnapshot(fallback, structureChanged = true)
+                    reportSuccessfulSyncToCms()
                     true
                 } else {
+                    reportSuccessfulSyncToCms()
                     isDisplayingContent()
                 }
             }
@@ -1020,9 +1089,10 @@ fun onUrlLoadFailed(assetName: String) {
 
     private suspend fun queuePopLog(record: PopLogRecord) {
         try {
-            telemetryRepository.queuePopLog(record)
+            popSessionRecorder.record(record)
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("OrionPoP", "queuePopLog failed: ${e.message}", e)
+            deviceLogCollector.logSync("PoP queue failed: ${e.message}")
         }
     }
 

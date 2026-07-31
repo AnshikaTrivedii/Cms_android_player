@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import com.orion.player.ui.playback.LocalStretchToFit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -38,6 +39,7 @@ fun PdfPlayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val stretchToFit = LocalStretchToFit.current
     var bitmap by remember(file.absolutePath, playbackSessionKey) { mutableStateOf<Bitmap?>(null) }
     var pageCount by remember(file.absolutePath, playbackSessionKey) { mutableStateOf(0) }
     var currentPage by remember(file.absolutePath, playbackSessionKey) { mutableStateOf(0) }
@@ -104,7 +106,7 @@ fun PdfPlayer(
         Image(
             bitmap = bitmap!!.asImageBitmap(),
             contentDescription = file.name,
-            contentScale = ContentScale.Fit,
+            contentScale = if (stretchToFit) ContentScale.Crop else ContentScale.Fit,
             modifier = modifier.fillMaxSize()
         )
     } else {

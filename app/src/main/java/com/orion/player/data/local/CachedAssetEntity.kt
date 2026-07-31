@@ -4,11 +4,14 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 /**
- * Local asset metadata and file path for offline playback.
+ * One playlist queue occurrence. [queueIndex] is the playback order slot;
+ * [assetId] may repeat when the CMS lists the same asset multiple times.
+ * Disk cache is still keyed by [assetId] (one file, many queue rows).
  */
 @Entity(tableName = "cached_assets")
 data class CachedAssetEntity(
-    @PrimaryKey val assetId: String,
+    @PrimaryKey val queueIndex: Int,
+    val assetId: String,
     val assetName: String,
     val assetType: String,
     val mimeType: String,

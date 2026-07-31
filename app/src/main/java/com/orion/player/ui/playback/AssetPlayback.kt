@@ -18,13 +18,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.net.Uri
 import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType
 import com.orion.player.data.remote.AssetType.normalizedType
 import com.orion.player.data.remote.AssetType.remoteSourceUrl
 import com.orion.player.ui.playback.player.DocumentPlayer
-import com.orion.player.ui.playback.player.HtmlPlayer
 import com.orion.player.ui.playback.player.ImagePlayer
 import com.orion.player.ui.playback.player.UrlPlayer
 import com.orion.player.ui.playback.player.VideoPlayer
@@ -32,6 +30,7 @@ import java.io.File
 
 /**
  * Reusable asset renderer for full-screen and zoned playback.
+ * Supported types: IMAGE, VIDEO, URL, DOCUMENT.
  */
 @Composable
 fun AssetPlayback(
@@ -86,37 +85,6 @@ fun AssetPlayback(
                 modifier = modifier
             )
         }
-        AssetType.HTML -> {
-            val remoteUrl = asset.remoteSourceUrl()
-            when {
-                localFile != null && localFile.exists() && localFile.length() > 0L -> {
-                    HtmlPlayer(
-                        url = Uri.fromFile(localFile).toString(),
-                        localFile = localFile,
-                        playbackSessionKey = playbackSessionId,
-                        onLoadSuccess = { onPlaybackStarted(asset.name) },
-                        // Soft-fail like URL: keep slot timing, don't hard-skip the queue.
-                        onLoadFailed = { onUrlLoadFailed(asset.name) },
-                        modifier = modifier
-                    )
-                }
-                !remoteUrl.isNullOrBlank() -> {
-                    UrlPlayer(
-                        url = remoteUrl,
-                        cachedFile = null,
-                        onLoadSuccess = { onUrlLoadSuccess(asset.name) },
-                        onLoadFailed = { onUrlLoadFailed(asset.name) },
-                        modifier = modifier
-                    )
-                }
-                else -> {
-                    LaunchedEffect(asset.id, playbackSessionId) {
-                        onAssetFailed(asset.name)
-                    }
-                    UnavailableAssetPlaceholder(modifier)
-                }
-            }
-        }
         AssetType.DOCUMENT -> {
             if (localFile == null || !localFile.exists()) {
                 UnavailableAssetPlaceholder(modifier)
@@ -131,11 +99,17 @@ fun AssetPlayback(
                 modifier = modifier
             )
         }
-        else -> UnsupportedAssetPlaceholder(
-            label = "Unsupported: ${asset.type}",
-            subtitle = asset.name,
-            modifier = modifier
-        )
+        else -> {
+            // Legacy HTML (and any unknown type): skip without crashing the queue.
+            LaunchedEffect(asset.id, playbackSessionId) {
+                onAssetFailed(asset.name)
+            }
+            UnsupportedAssetPlaceholder(
+                label = "Unsupported: ${asset.type}",
+                subtitle = asset.name,
+                modifier = modifier
+            )
+        }
     }
 }
 

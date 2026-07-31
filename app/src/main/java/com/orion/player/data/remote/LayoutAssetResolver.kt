@@ -78,7 +78,11 @@ object LayoutAssetResolver {
         val embedded = zone.resolvedAssets()
         if (embedded.isNotEmpty()) {
             return embedded
-                .map { asset -> (byId[asset.id] ?: asset).mergeWith(asset) }
+                // Prefer occurrence fields (duration/position), fill download URL from manifest.
+                .map { asset ->
+                    val manifest = byId[asset.id]
+                    if (manifest != null) asset.mergeWith(manifest) else asset
+                }
                 .sortedBy { it.position }
         }
         return emptyList()

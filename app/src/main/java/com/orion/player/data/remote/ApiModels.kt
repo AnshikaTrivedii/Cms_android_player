@@ -75,11 +75,22 @@ data class HeartbeatRequest(
     val storageTotalBytes: Long? = null,
     val storageFreeBytes: Long? = null,
     val networkStatus: String? = null,
-    val permissions: DevicePermissionsPayload? = null
+    val stretchToFit: Boolean? = null,
+    val permissions: DevicePermissionsPayload? = null,
+    val popPendingCount: Int? = null,
+    val popLastGeneratedAt: String? = null,
+    val popLastUploadedAt: String? = null,
+    val popLastError: String? = null
+)
+
+data class DisplayConfig(
+    val orientation: String? = null,
+    val stretchToFit: Boolean? = null
 )
 
 data class HeartbeatResponse(
     val status: String,
+    val deviceStatus: String? = null,
     val contentRevision: String? = null,
     val syncRequired: Boolean? = null,
     val commands: List<com.orion.player.data.enterprise.RemoteCommand>? = null,
@@ -92,7 +103,10 @@ data class HeartbeatResponse(
     val syncIntervalSeconds: Int? = null,
     val revisionPollIntervalSeconds: Int? = null,
     val initialSyncPending: Boolean? = null,
-    val initialSyncTimeoutSeconds: Int? = null
+    val initialSyncTimeoutSeconds: Int? = null,
+    val stretchToFit: Boolean? = null,
+    val orientation: String? = null,
+    val display: DisplayConfig? = null
 )
 
 data class PlayerFeatures(
@@ -117,6 +131,7 @@ data class PendingRemoteCommand(
 
 data class SyncRevisionResponse(
     val revision: String,
+    val deviceStatus: String? = null,
     val updatedAt: String? = null,
     val syncRequired: Boolean = false,
     val playlistVersion: Int? = null,
@@ -126,13 +141,18 @@ data class SyncRevisionResponse(
     val layoutId: String? = null,
     val initialSyncPending: Boolean = false,
     val revisionPollIntervalSeconds: Int = 5,
-    val syncIntervalSeconds: Int = 120
+    val syncIntervalSeconds: Int = 120,
+    val stretchToFit: Boolean? = null,
+    val orientation: String? = null,
+    val display: DisplayConfig? = null,
+    val configVersion: Int? = null
 )
 
 // ── Sync ───────────────────────────────────────────────────
 
 data class SyncResponse(
     @SerializedName("unchanged") private val unchangedRaw: Boolean? = null,
+    @SerializedName("deviceStatus") val deviceStatus: String? = null,
     @SerializedName("playlistVersion") val playlistVersion: Int? = null,
     @SerializedName("playlist") val playlist: PlaylistInfo? = null,
     @SerializedName("layoutVersion") val layoutVersion: Int? = null,
@@ -153,7 +173,10 @@ data class SyncResponse(
     @SerializedName("syncIntervalSeconds") val syncIntervalSeconds: Int? = null,
     @SerializedName("revisionPollIntervalSeconds") val revisionPollIntervalSeconds: Int? = null,
     @SerializedName("initialSyncPending") val initialSyncPending: Boolean? = null,
-    @SerializedName("initialSyncTimeoutSeconds") val initialSyncTimeoutSeconds: Int? = null
+    @SerializedName("initialSyncTimeoutSeconds") val initialSyncTimeoutSeconds: Int? = null,
+    @SerializedName("stretchToFit") val stretchToFit: Boolean? = null,
+    @SerializedName("orientation") val orientation: String? = null,
+    @SerializedName("display") val display: DisplayConfig? = null
 ) {
     val unchanged: Boolean get() = unchangedRaw ?: false
     fun resolvedAssets(): List<AssetInfo> = assets.orEmpty().filter { it.id.isNotBlank() }
@@ -195,7 +218,8 @@ data class AssetInfo(
     @SerializedName("requiresDownload") private val requiresDownloadRaw: Boolean? = null,
     @SerializedName("available") private val availableRaw: Boolean? = null,
     @SerializedName("status") val status: String? = null,
-    @SerializedName("unavailableReason") val unavailableReason: String? = null
+    @SerializedName("unavailableReason") val unavailableReason: String? = null,
+    @SerializedName("documentFormat") val documentFormat: String? = null
 ) {
     val id: String get() = idRaw.orEmpty()
     val name: String get() = nameRaw.orEmpty()
@@ -230,7 +254,8 @@ data class AssetInfo(
             requiresDownloadRaw = requiresDownloadRaw ?: other.requiresDownloadRaw,
             availableRaw = availableRaw ?: other.availableRaw,
             status = status ?: other.status,
-            unavailableReason = unavailableReason ?: other.unavailableReason
+            unavailableReason = unavailableReason ?: other.unavailableReason,
+            documentFormat = documentFormat ?: other.documentFormat
         )
     }
 

@@ -13,8 +13,7 @@ import com.orion.player.data.remote.AssetInfo
 import java.io.File
 
 /**
- * In-player document renderer for PDF, HTML, and plain-text documents.
- * Office formats should be converted to PDF/HTML by the CMS before delivery.
+ * In-player document renderer for PDF and Office documents.
  */
 @Composable
 fun DocumentPlayer(
@@ -33,9 +32,19 @@ fun DocumentPlayer(
             onRenderFailed = onLoadFailed,
             modifier = modifier
         )
-        DocumentRenderMode.HTML -> HtmlPlayer(
-            url = file.toURI().toString(),
-            localFile = file,
+        DocumentRenderMode.OFFICE_OOXML -> OfficeDocumentPlayer(
+            file = file,
+            asset = asset,
+            ooxml = true,
+            playbackSessionKey = playbackSessionKey,
+            onLoadSuccess = onLoadSuccess,
+            onLoadFailed = onLoadFailed,
+            modifier = modifier
+        )
+        DocumentRenderMode.OFFICE_LEGACY -> OfficeDocumentPlayer(
+            file = file,
+            asset = asset,
+            ooxml = false,
             playbackSessionKey = playbackSessionKey,
             onLoadSuccess = onLoadSuccess,
             onLoadFailed = onLoadFailed,

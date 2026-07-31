@@ -232,3 +232,53 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
         )
     }
 }
+
+/**
+ * Playlist occurrences: allow the same assetId multiple times with per-slot duration.
+ * Replaces assetId primary key with queueIndex.
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS cached_assets_new (
+                queueIndex INTEGER NOT NULL PRIMARY KEY,
+                assetId TEXT NOT NULL,
+                assetName TEXT NOT NULL,
+                assetType TEXT NOT NULL,
+                mimeType TEXT NOT NULL,
+                durationSeconds INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                downloadUrl TEXT,
+                fileSize INTEGER NOT NULL,
+                remoteUrl TEXT,
+                localFilePath TEXT,
+                fileVersion TEXT NOT NULL,
+                downloadTimestamp INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO cached_assets_new (
+                queueIndex, assetId, assetName, assetType, mimeType, durationSeconds,
+                position, downloadUrl, fileSize, remoteUrl, localFilePath,
+                fileVersion, downloadTimestamp
+            )
+            SELECT
+                (
+                    SELECT COUNT(*) FROM cached_assets AS b
+                    WHERE b.position < a.position
+                       OR (b.position = a.position AND b.assetId < a.assetId)
+                       OR (b.position = a.position AND b.assetId = a.assetId AND b.rowid < a.rowid)
+                ),
+                a.assetId, a.assetName, a.assetType, a.mimeType, a.durationSeconds,
+                a.position, a.downloadUrl, a.fileSize, a.remoteUrl, a.localFilePath,
+                a.fileVersion, a.downloadTimestamp
+            FROM cached_assets AS a
+            """.trimIndent()
+        )
+        db.execSQL("DROP TABLE cached_assets")
+        db.execSQL("ALTER TABLE cached_assets_new RENAME TO cached_assets")
+    }
+}

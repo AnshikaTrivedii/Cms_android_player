@@ -51,7 +51,7 @@ class PopLogFlushScheduler @Inject constructor(
 
     suspend fun flushNow(): Int {
         if (!sessionGuard.isPairedWithToken()) return 0
-        if (!popConfigManager.isPopEnabled()) return 0
+        if (!popConfigManager.isUploadEnabled()) return 0
         return telemetryRepository.flushPopLogs()
     }
 }

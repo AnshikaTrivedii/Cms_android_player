@@ -22,7 +22,6 @@ import com.orion.player.data.recovery.PlayerHealthMonitor
 import com.orion.player.data.recovery.PlayerLaunchHelper
 import com.orion.player.data.recovery.PlayerRuntimeConfig
 import com.orion.player.data.stability.StabilityMonitor
-import com.orion.player.data.analytics.PopConfigManager
 import com.orion.player.data.analytics.PopLogFlushScheduler
 import com.orion.player.data.sync.ContentSyncScheduler
 import com.orion.player.data.sync.RevisionPollScheduler
@@ -152,12 +151,22 @@ class PlayerForegroundService : Service() {
         }
 
         if (healthMonitor.isPlaybackStuck()) {
-            OrionRecoveryLogger.logPlaybackRestart("watchdog.playback_stuck")
-            if (!recoveryCoordinator.requestPlaybackRestart("watchdog.playback_stuck")) {
+            val reason = when {
+                healthMonitor.isPopGenerationStalled() -> "watchdog.pop_stall"
+                !healthMonitor.isSlotLoopAlive() -> "watchdog.slot_loop_dead"
+                else -> "watchdog.playback_stuck"
+            }
+            OrionRecoveryLogger.logPlaybackRestart(reason)
+            if (!recoveryCoordinator.requestPlaybackRestart(reason)) {
                 PlayerLaunchHelper.launchPlayer(
                     applicationContext,
                     "watchdog.playback_restart_fallback"
                 )
+            }
+            // Ensure flush/heartbeat survive long runs even if jobs were cancelled.
+            if (securePrefs.isAuthenticated()) {
+                heartbeatScheduler.start()
+                popLogFlushScheduler.start()
             }
         }
     }
