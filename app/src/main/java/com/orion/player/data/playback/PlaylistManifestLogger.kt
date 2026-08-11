@@ -31,7 +31,7 @@ object PlaylistManifestLogger {
                 TAG,
                 "CMS asset #${index + 1}: queuePos=${asset.position} id=${asset.id} " +
                     "name=${asset.name} type=${asset.normalizedType()} " +
-                    "durationSec=${asset.cmsDurationSeconds ?: "default"}"
+                    "durationSec=${asset.cmsDurationSeconds ?: "NULL"}"
             )
         }
         Log.i(TAG, "CMS order: ${ordered.map { it.position to it.name }}")

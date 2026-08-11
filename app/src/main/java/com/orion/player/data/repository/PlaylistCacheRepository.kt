@@ -135,15 +135,22 @@ class PlaylistCacheRepository @Inject constructor(
             playlist = entity,
             assets = orderedAssets.mapIndexed { queueIndex, asset ->
                 val localFile = snapshot.localFiles[asset.id]
-                // Videos without CMS duration must stay 0 so hasExplicitDuration() is false
-                // after cache reload (otherwise default 10s truncates playback).
-                val durationToStore = asset.cmsDurationSeconds
-                    ?: if (asset.type.equals("VIDEO", ignoreCase = true)) 0 else asset.durationSeconds
-                previousByIndex[queueIndex]?.takeIf { it != durationToStore }?.let { oldDuration ->
+                // Preserve NULL — never invent 10/15/20/0/-1. Positive = playlist override only.
+                val durationToStore = asset.cmsDurationSeconds?.takeIf { it > 0 }
+                com.orion.player.data.config.DevicePlaybackDurationLogger.cacheDurationStored(
+                    assetName = asset.name,
+                    assetType = asset.type,
+                    durationSeconds = durationToStore
+                )
+                // containsKey, not a null check: NULL -> explicit is a real change worth logging.
+                if (previousByIndex.containsKey(queueIndex) &&
+                    previousByIndex[queueIndex] != durationToStore
+                ) {
                     Log.i(
                         TAG,
                         "Cache duration updated: queueIndex=$queueIndex asset=${asset.name} " +
-                            "oldSec=$oldDuration newSec=$durationToStore " +
+                            "oldSec=${previousByIndex[queueIndex] ?: "NULL"} " +
+                            "newSec=${durationToStore ?: "NULL"} " +
                             "version=${snapshot.playlistVersion ?: "none"}"
                     )
                 }

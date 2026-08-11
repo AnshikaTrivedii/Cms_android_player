@@ -64,11 +64,23 @@ object SyncDiagnostics {
                 "unchanged=${response.unchanged} " +
                 "assetCount=${response.resolvedAssets().size}"
         )
+        Log.i(
+            TAG,
+            "E2E STEP2 sync playback settings JSON: " +
+                "defaultImageDuration=${response.defaultImageDuration} " +
+                "defaultDocumentDuration=${response.defaultDocumentDuration} " +
+                "defaultUrlDuration=${response.defaultUrlDuration} " +
+                "defaultVideoDuration=${response.defaultVideoDuration} " +
+                "playback=${response.playback} " +
+                "display.playback=${response.display?.playback} " +
+                "configVersion=${response.configVersion}"
+        )
         response.resolvedAssets().forEach { asset ->
             Log.i(
                 TAG,
                 "STEP 2 asset: id=${asset.id} name=${asset.name} type=${asset.type} " +
-                    "position=${asset.position} hasDownloadUrl=${!asset.downloadUrl.isNullOrBlank()} " +
+                    "position=${asset.position} durationSecondsRaw=${asset.cmsDurationSeconds} " +
+                    "hasDownloadUrl=${!asset.downloadUrl.isNullOrBlank()} " +
                     "hasUrl=${!asset.url.isNullOrBlank()} fileSize=${asset.fileSize}"
             )
         }

@@ -59,6 +59,11 @@ class SecurePrefs @Inject constructor(
         private const val KEY_STRETCH_TO_FIT = "stretch_to_fit"
         private const val KEY_DESIRED_ORIENTATION = "desired_orientation"
         private const val KEY_DISPLAY_CONFIG_VERSION = "display_config_version"
+        private const val KEY_DEFAULT_IMAGE_DURATION = "default_image_duration_sec"
+        private const val KEY_DEFAULT_DOCUMENT_DURATION = "default_document_duration_sec"
+        private const val KEY_DEFAULT_URL_DURATION = "default_url_duration_sec"
+        private const val KEY_DEFAULT_VIDEO_DURATION = "default_video_duration_sec"
+        private const val KEY_PLAYBACK_DURATIONS_CACHED = "playback_durations_cached"
     }
 
     /**
@@ -147,6 +152,53 @@ class SecurePrefs @Inject constructor(
     var displayConfigVersion: Int
         get() = prefs.getInt(KEY_DISPLAY_CONFIG_VERSION, 0)
         set(value) = prefs.edit().putInt(KEY_DISPLAY_CONFIG_VERSION, value).apply()
+
+    /** True after CMS playback durations have been downloaded at least once. */
+    var playbackDurationsCached: Boolean
+        get() = prefs.getBoolean(KEY_PLAYBACK_DURATIONS_CACHED, false)
+        set(value) = prefs.edit().putBoolean(KEY_PLAYBACK_DURATIONS_CACHED, value).apply()
+
+    var defaultImageDurationSeconds: Int
+        get() = prefs.getInt(
+            KEY_DEFAULT_IMAGE_DURATION,
+            com.orion.player.data.config.DevicePlaybackDurations.DEFAULT_IMAGE_SECONDS
+        )
+        set(value) = prefs.edit().putInt(KEY_DEFAULT_IMAGE_DURATION, value).apply()
+
+    var defaultDocumentDurationSeconds: Int
+        get() = prefs.getInt(
+            KEY_DEFAULT_DOCUMENT_DURATION,
+            com.orion.player.data.config.DevicePlaybackDurations.DEFAULT_DOCUMENT_SECONDS
+        )
+        set(value) = prefs.edit().putInt(KEY_DEFAULT_DOCUMENT_DURATION, value).apply()
+
+    var defaultUrlDurationSeconds: Int
+        get() = prefs.getInt(
+            KEY_DEFAULT_URL_DURATION,
+            com.orion.player.data.config.DevicePlaybackDurations.DEFAULT_URL_SECONDS
+        )
+        set(value) = prefs.edit().putInt(KEY_DEFAULT_URL_DURATION, value).apply()
+
+    /** Null when the CMS has never sent a video default — videos run to natural end. */
+    var defaultVideoDurationSeconds: Int?
+        get() = prefs.getInt(
+            KEY_DEFAULT_VIDEO_DURATION,
+            com.orion.player.data.config.DevicePlaybackDurations.VIDEO_NATURAL_END
+        ).takeIf { it > 0 }
+        set(value) = prefs.edit()
+            .putInt(
+                KEY_DEFAULT_VIDEO_DURATION,
+                value ?: com.orion.player.data.config.DevicePlaybackDurations.VIDEO_NATURAL_END
+            )
+            .apply()
+
+    fun playbackDurations(): com.orion.player.data.config.DevicePlaybackDurations =
+        com.orion.player.data.config.DevicePlaybackDurations.sanitize(
+            image = defaultImageDurationSeconds,
+            document = defaultDocumentDurationSeconds,
+            url = defaultUrlDurationSeconds,
+            video = defaultVideoDurationSeconds
+        )
 
     /** Seconds between full /player/sync polls (server-configurable, default 120). */
     var syncIntervalSeconds: Int

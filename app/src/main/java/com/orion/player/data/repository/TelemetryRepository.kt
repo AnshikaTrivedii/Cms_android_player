@@ -95,11 +95,31 @@ class TelemetryRepository @Inject constructor(
                     DeviceRegistrationStatusParser.fromSuccessField(mapped.deviceStatus)
                 )
                 applyServerPopConfig(mapped.popLogsExpected, mapped.features)
+                val durationJson = gson.toJson(
+                    mapOf(
+                        "defaultImageDuration" to mapped.defaultImageDuration,
+                        "defaultDocumentDuration" to mapped.defaultDocumentDuration,
+                        "defaultUrlDuration" to mapped.defaultUrlDuration,
+                        "defaultVideoDuration" to mapped.defaultVideoDuration,
+                        "playback" to mapped.playback,
+                        "display" to mapped.display,
+                        "configVersion" to mapped.configVersion
+                    )
+                )
+                com.orion.player.data.config.DevicePlaybackDurationLogger.receivedJson(
+                    source = "heartbeat",
+                    json = durationJson
+                )
                 deviceConfigManager.applyFromServer(
                     configVersion = mapped.configVersion,
                     stretchToFit = mapped.stretchToFit,
                     orientation = mapped.orientation,
-                    display = mapped.display
+                    display = mapped.display,
+                    playback = mapped.playback,
+                    defaultImageDuration = mapped.defaultImageDuration,
+                    defaultDocumentDuration = mapped.defaultDocumentDuration,
+                    defaultUrlDuration = mapped.defaultUrlDuration,
+                    defaultVideoDuration = mapped.defaultVideoDuration
                 )
                 syncIntervalConfig.updateInterval(mapped.syncIntervalSeconds)
                 mapped.initialSyncTimeoutSeconds?.let {

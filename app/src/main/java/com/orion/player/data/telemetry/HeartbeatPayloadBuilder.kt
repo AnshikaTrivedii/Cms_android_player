@@ -44,6 +44,7 @@ class HeartbeatPayloadBuilder @Inject constructor(
         val popHealth = popHealthTracker.snapshot(pending)
         val appliedOrientation = deviceConfigManager.orientation.value.name
         val appliedStretch = deviceConfigManager.stretchToFit.value
+        val durations = deviceConfigManager.playbackDurations.value
 
         return HeartbeatPayloadNormalizer.normalize(
             HeartbeatRequest(
@@ -70,6 +71,16 @@ class HeartbeatPayloadBuilder @Inject constructor(
                 storageFreeBytes = health.storageFreeMb * 1024L * 1024L,
                 networkStatus = metadata.networkStatus,
                 stretchToFit = appliedStretch,
+                defaultImageDuration = durations.imageSeconds,
+                defaultDocumentDuration = durations.documentSeconds,
+                defaultUrlDuration = durations.urlSeconds,
+                defaultVideoDuration = durations.videoSeconds,
+                playback = com.orion.player.data.remote.PlayerPlaybackDurations(
+                    imageDuration = durations.imageSeconds,
+                    documentDuration = durations.documentSeconds,
+                    urlDuration = durations.urlSeconds,
+                    videoDuration = durations.videoSeconds
+                ),
                 permissions = devicePermissionReporter.toHeartbeatPayload(),
                 popPendingCount = popHealth.pendingCount,
                 popLastGeneratedAt = popHealth.lastGeneratedAt,

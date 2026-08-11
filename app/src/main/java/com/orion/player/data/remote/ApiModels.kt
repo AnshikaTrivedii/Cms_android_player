@@ -76,6 +76,11 @@ data class HeartbeatRequest(
     val storageFreeBytes: Long? = null,
     val networkStatus: String? = null,
     val stretchToFit: Boolean? = null,
+    val defaultImageDuration: Int? = null,
+    val defaultDocumentDuration: Int? = null,
+    val defaultUrlDuration: Int? = null,
+    val defaultVideoDuration: Int? = null,
+    val playback: PlayerPlaybackDurations? = null,
     val permissions: DevicePermissionsPayload? = null,
     val popPendingCount: Int? = null,
     val popLastGeneratedAt: String? = null,
@@ -83,9 +88,26 @@ data class HeartbeatRequest(
     val popLastError: String? = null
 )
 
+data class PlayerPlaybackDurations(
+    val imageDuration: Int? = null,
+    val documentDuration: Int? = null,
+    val urlDuration: Int? = null,
+    val videoDuration: Int? = null,
+    /** Aliases matching CMS field names on some payloads. */
+    val defaultImageDuration: Int? = null,
+    val defaultDocumentDuration: Int? = null,
+    val defaultUrlDuration: Int? = null,
+    val defaultVideoDuration: Int? = null
+)
+
 data class DisplayConfig(
     val orientation: String? = null,
-    val stretchToFit: Boolean? = null
+    val stretchToFit: Boolean? = null,
+    val playback: PlayerPlaybackDurations? = null,
+    val defaultImageDuration: Int? = null,
+    val defaultDocumentDuration: Int? = null,
+    val defaultUrlDuration: Int? = null,
+    val defaultVideoDuration: Int? = null
 )
 
 data class HeartbeatResponse(
@@ -106,7 +128,12 @@ data class HeartbeatResponse(
     val initialSyncTimeoutSeconds: Int? = null,
     val stretchToFit: Boolean? = null,
     val orientation: String? = null,
-    val display: DisplayConfig? = null
+    val display: DisplayConfig? = null,
+    val playback: PlayerPlaybackDurations? = null,
+    val defaultImageDuration: Int? = null,
+    val defaultDocumentDuration: Int? = null,
+    val defaultUrlDuration: Int? = null,
+    val defaultVideoDuration: Int? = null
 )
 
 data class PlayerFeatures(
@@ -145,6 +172,11 @@ data class SyncRevisionResponse(
     val stretchToFit: Boolean? = null,
     val orientation: String? = null,
     val display: DisplayConfig? = null,
+    val playback: PlayerPlaybackDurations? = null,
+    val defaultImageDuration: Int? = null,
+    val defaultDocumentDuration: Int? = null,
+    val defaultUrlDuration: Int? = null,
+    val defaultVideoDuration: Int? = null,
     val configVersion: Int? = null
 )
 
@@ -176,7 +208,12 @@ data class SyncResponse(
     @SerializedName("initialSyncTimeoutSeconds") val initialSyncTimeoutSeconds: Int? = null,
     @SerializedName("stretchToFit") val stretchToFit: Boolean? = null,
     @SerializedName("orientation") val orientation: String? = null,
-    @SerializedName("display") val display: DisplayConfig? = null
+    @SerializedName("display") val display: DisplayConfig? = null,
+    @SerializedName("playback") val playback: PlayerPlaybackDurations? = null,
+    @SerializedName("defaultImageDuration") val defaultImageDuration: Int? = null,
+    @SerializedName("defaultDocumentDuration") val defaultDocumentDuration: Int? = null,
+    @SerializedName("defaultUrlDuration") val defaultUrlDuration: Int? = null,
+    @SerializedName("defaultVideoDuration") val defaultVideoDuration: Int? = null
 ) {
     val unchanged: Boolean get() = unchangedRaw ?: false
     fun resolvedAssets(): List<AssetInfo> = assets.orEmpty().filter { it.id.isNotBlank() }
@@ -225,10 +262,14 @@ data class AssetInfo(
     val name: String get() = nameRaw.orEmpty()
     val type: String get() = typeRaw?.takeIf { it.isNotBlank() } ?: "IMAGE"
     val mimeType: String get() = mimeTypeRaw?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
-    val durationSeconds: Int get() = durationSecondsRaw?.coerceAtLeast(1) ?: 10
+    /**
+     * Playlist slot duration from CMS. Null means "use device playback settings"
+     * (or natural end for video). Never invents 10/15/20.
+     */
+    val durationSeconds: Int? get() = durationSecondsRaw?.takeIf { it > 0 }
     val position: Int get() = positionRaw ?: 0
-    /** Raw CMS duration; null when the server omitted the field. */
-    val cmsDurationSeconds: Int? get() = durationSecondsRaw
+    /** Raw CMS duration; null when the server omitted the field or sent null. */
+    val cmsDurationSeconds: Int? get() = durationSecondsRaw?.takeIf { it > 0 }
     val fileSize: Int get() = fileSizeRaw ?: 0
     val assetVersion: Int? get() = assetVersionRaw
     val requiresDownload: Boolean get() = requiresDownloadRaw ?: true
@@ -243,7 +284,12 @@ data class AssetInfo(
             nameRaw = name.takeIf { it.isNotBlank() } ?: other.name,
             typeRaw = type.takeIf { it.isNotBlank() } ?: other.type,
             mimeTypeRaw = mimeType.takeIf { it.isNotBlank() } ?: other.mimeType,
-            durationSecondsRaw = durationSecondsRaw ?: other.durationSecondsRaw,
+            // Prefer an explicit positive duration from either side; only stay null when both are null/blank.
+            // Do not invent 10. Allow null (blank playlist duration) to win when the other side is also blank.
+            durationSecondsRaw = listOfNotNull(
+                durationSecondsRaw?.takeIf { it > 0 },
+                other.durationSecondsRaw?.takeIf { it > 0 }
+            ).firstOrNull(),
             positionRaw = positionRaw ?: other.positionRaw,
             downloadUrl = downloadUrl?.takeIf { it.isNotBlank() } ?: other.downloadUrl,
             fileSizeRaw = fileSizeRaw?.takeIf { it > 0 } ?: other.fileSizeRaw,
@@ -260,13 +306,13 @@ data class AssetInfo(
     }
 
     companion object {
-        /** Reconstruct from Room cache (not from Gson). */
+        /** Reconstruct from Room cache (not from Gson). Null duration is preserved. */
         fun fromCache(
             id: String,
             name: String,
             type: String,
             mimeType: String,
-            durationSeconds: Int,
+            durationSeconds: Int?,
             position: Int,
             downloadUrl: String?,
             fileSize: Int,
@@ -277,7 +323,8 @@ data class AssetInfo(
             nameRaw = name,
             typeRaw = type,
             mimeTypeRaw = mimeType,
-            durationSecondsRaw = durationSeconds,
+            // Preserve null; never coerce sentinel/legacy values into a fake duration.
+            durationSecondsRaw = durationSeconds?.takeIf { it > 0 },
             positionRaw = position,
             downloadUrl = downloadUrl,
             fileSizeRaw = fileSize,

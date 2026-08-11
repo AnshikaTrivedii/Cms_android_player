@@ -282,3 +282,52 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
         db.execSQL("ALTER TABLE cached_assets_new RENAME TO cached_assets")
     }
 }
+
+/**
+ * Allow NULL playlist durations in cache (use device defaults at playback time).
+ * Converts legacy sentinel (-1) and non-positive values to NULL.
+ */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS cached_assets_new (
+                queueIndex INTEGER NOT NULL PRIMARY KEY,
+                assetId TEXT NOT NULL,
+                assetName TEXT NOT NULL,
+                assetType TEXT NOT NULL,
+                mimeType TEXT NOT NULL,
+                durationSeconds INTEGER,
+                position INTEGER NOT NULL,
+                downloadUrl TEXT,
+                fileSize INTEGER NOT NULL,
+                remoteUrl TEXT,
+                localFilePath TEXT,
+                fileVersion TEXT NOT NULL,
+                downloadTimestamp INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO cached_assets_new (
+                queueIndex, assetId, assetName, assetType, mimeType, durationSeconds,
+                position, downloadUrl, fileSize, remoteUrl, localFilePath,
+                fileVersion, downloadTimestamp
+            )
+            SELECT
+                queueIndex, assetId, assetName, assetType, mimeType,
+                CASE
+                    WHEN durationSeconds IS NULL THEN NULL
+                    WHEN durationSeconds <= 0 THEN NULL
+                    ELSE durationSeconds
+                END,
+                position, downloadUrl, fileSize, remoteUrl, localFilePath,
+                fileVersion, downloadTimestamp
+            FROM cached_assets
+            """.trimIndent()
+        )
+        db.execSQL("DROP TABLE cached_assets")
+        db.execSQL("ALTER TABLE cached_assets_new RENAME TO cached_assets")
+    }
+}

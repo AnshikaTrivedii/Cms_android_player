@@ -15,7 +15,8 @@ data class CachedAssetEntity(
     val assetName: String,
     val assetType: String,
     val mimeType: String,
-    val durationSeconds: Int,
+    /** Null = use device playback defaults (or video natural end). Never store fake 10/15/20. */
+    val durationSeconds: Int?,
     val position: Int,
     val downloadUrl: String?,
     val fileSize: Int,

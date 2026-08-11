@@ -165,11 +165,26 @@ class ContentSyncCoordinator @Inject constructor(
             deviceRegistrationManager.handleStatus(
                 DeviceRegistrationStatusParser.fromSuccessField(response.deviceStatus)
             )
+            com.orion.player.data.config.DevicePlaybackDurationLogger.receivedJson(
+                source = "sync-revision",
+                json = "defaultImageDuration=${response.defaultImageDuration}," +
+                    "defaultDocumentDuration=${response.defaultDocumentDuration}," +
+                    "defaultUrlDuration=${response.defaultUrlDuration}," +
+                    "defaultVideoDuration=${response.defaultVideoDuration}," +
+                    "playback=${response.playback}," +
+                    "display.playback=${response.display?.playback}," +
+                    "configVersion=${response.configVersion}"
+            )
             deviceConfigManager.applyFromServer(
                 configVersion = response.configVersion,
                 stretchToFit = response.stretchToFit,
                 orientation = response.orientation,
-                display = response.display
+                display = response.display,
+                playback = response.playback,
+                defaultImageDuration = response.defaultImageDuration,
+                defaultDocumentDuration = response.defaultDocumentDuration,
+                defaultUrlDuration = response.defaultUrlDuration,
+                defaultVideoDuration = response.defaultVideoDuration
             )
             revisionEndpointAvailable = true
             revisionPollIntervalConfig.updateInterval(response.revisionPollIntervalSeconds)
@@ -301,11 +316,26 @@ class ContentSyncCoordinator @Inject constructor(
             deviceRegistrationManager.handleStatus(
                 DeviceRegistrationStatusParser.fromSuccessField(syncResponse.deviceStatus)
             )
+            com.orion.player.data.config.DevicePlaybackDurationLogger.receivedJson(
+                source = "sync",
+                json = "defaultImageDuration=${syncResponse.defaultImageDuration}," +
+                    "defaultDocumentDuration=${syncResponse.defaultDocumentDuration}," +
+                    "defaultUrlDuration=${syncResponse.defaultUrlDuration}," +
+                    "defaultVideoDuration=${syncResponse.defaultVideoDuration}," +
+                    "playback=${syncResponse.playback}," +
+                    "display.playback=${syncResponse.display?.playback}," +
+                    "configVersion=${syncResponse.configVersion}"
+            )
             deviceConfigManager.applyFromServer(
                 configVersion = syncResponse.configVersion,
                 stretchToFit = syncResponse.stretchToFit,
                 orientation = syncResponse.orientation,
-                display = syncResponse.display
+                display = syncResponse.display,
+                playback = syncResponse.playback,
+                defaultImageDuration = syncResponse.defaultImageDuration,
+                defaultDocumentDuration = syncResponse.defaultDocumentDuration,
+                defaultUrlDuration = syncResponse.defaultUrlDuration,
+                defaultVideoDuration = syncResponse.defaultVideoDuration
             )
             popConfigManager.update(syncResponse.popLogsExpected, syncResponse.features)
             syncIntervalConfig.updateInterval(syncResponse.syncIntervalSeconds)

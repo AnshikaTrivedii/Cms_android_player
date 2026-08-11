@@ -62,7 +62,8 @@ object AssetType {
             name == other.name &&
             normalizedType() == other.normalizedType() &&
             mimeType == other.mimeType &&
-            durationSeconds == other.durationSeconds &&
+            // Compare raw/null-preserving duration. Never treat null as 10.
+            cmsDurationSeconds == other.cmsDurationSeconds &&
             position == other.position &&
             fileSize == other.fileSize &&
             url == other.url &&

@@ -17,7 +17,9 @@ import com.orion.player.data.playback.PlaylistManifestLogger
 import com.orion.player.data.playback.inPlaylistOrder
 import com.orion.player.data.playback.hasExplicitDuration
 import com.orion.player.data.playback.DocumentFormat
+import com.orion.player.data.playback.resolvePlaybackDuration
 import com.orion.player.data.playback.playbackSlotDurationMs
+import com.orion.player.data.config.DevicePlaybackDurations
 import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType
 import com.orion.player.data.remote.AssetType.deferPopStartUntilReady
@@ -616,7 +618,11 @@ class PlaybackViewModel @Inject constructor(
 
         val asset = playlistAssets[index]
         val playlistName = playlistInfo?.name.orEmpty()
-        val configuredMs = asset.playbackSlotDurationMs()
+        // Capture device defaults at slot start so CMS duration setting changes
+        // apply from the next asset onward (current asset finishes normally).
+        val defaultsAtSlotStart = deviceConfigManager.playbackDurations.value
+        val resolved = asset.resolvePlaybackDuration(defaultsAtSlotStart, log = true)
+        val configuredMs = resolved.durationMs
         val slotStart = Instant.now()
 
         contentReadyDeferred = CompletableDeferred()
@@ -641,12 +647,22 @@ class PlaybackViewModel @Inject constructor(
             AssetType.VIDEO -> {
                 healthMonitor.recordVideoSlotActive(true)
                 try {
-                    playVideoSlot(queueIndex = index, asset = asset, configuredMs = configuredMs)
+                    playVideoSlot(
+                        queueIndex = index,
+                        asset = asset,
+                        configuredMs = configuredMs,
+                        defaultsAtSlotStart = defaultsAtSlotStart
+                    )
                 } finally {
                     healthMonitor.recordVideoSlotActive(false)
                 }
             }
-            else -> playTimedSlot(queueIndex = index, asset = asset, configuredMs = configuredMs)
+            else -> playTimedSlot(
+                queueIndex = index,
+                asset = asset,
+                configuredMs = configuredMs,
+                defaultsAtSlotStart = defaultsAtSlotStart
+            )
         }
 
         if (abortSlotForGeneration(generation, played = true, result = result, slotStart = slotStart)) return
@@ -697,28 +713,41 @@ class PlaybackViewModel @Inject constructor(
         return Duration.between(start, end).seconds.toInt().coerceAtLeast(1)
     }
 
-    private suspend fun playTimedSlot(queueIndex: Int, asset: AssetInfo, configuredMs: Long): String {
+    private suspend fun playTimedSlot(
+        queueIndex: Int,
+        asset: AssetInfo,
+        configuredMs: Long,
+        defaultsAtSlotStart: DevicePlaybackDurations
+    ): String {
         if (asset.deferPopStartUntilReady()) {
             if (!awaitContentReady(asset.name)) return "FAILED"
         }
         val startTime = activePopSession?.contentReadyTime ?: Instant.now()
-        waitForConfiguredDuration(queueIndex, startTime)
+        waitForConfiguredDuration(queueIndex, startTime, configuredMs, defaultsAtSlotStart)
         return "VERIFIED"
     }
 
-    private suspend fun playVideoSlot(queueIndex: Int, asset: AssetInfo, configuredMs: Long): String {
+    private suspend fun playVideoSlot(
+        queueIndex: Int,
+        asset: AssetInfo,
+        configuredMs: Long,
+        defaultsAtSlotStart: DevicePlaybackDurations
+    ): String {
         if (asset.deferPopStartUntilReady()) {
             if (!awaitContentReady(asset.name)) return "FAILED"
         }
         // Always use this queue index — never find-by-id (duplicates share ids).
         val latest = playlistAssets.getOrNull(queueIndex) ?: asset
-        return if (latest.hasExplicitDuration()) {
+        // Timed whenever a playlist override or a device video default applies;
+        // natural end only when neither is configured.
+        val timedMs = latest.playbackSlotDurationMs(defaultsAtSlotStart)
+        return if (timedMs > 0L) {
             val startTime = activePopSession?.contentReadyTime ?: Instant.now()
-            waitForConfiguredDuration(queueIndex, startTime)
+            waitForConfiguredDuration(queueIndex, startTime, configuredMs, defaultsAtSlotStart)
             videoStopToken++
             emitFullScreen()
             delay(150L)
-            val configured = latest.playbackSlotDurationMs()
+            val configured = latest.playbackSlotDurationMs(defaultsAtSlotStart)
             PlaybackEngineLogger.logVideoDurationStop(
                 assetName = latest.name,
                 configuredMs = configured,
@@ -735,13 +764,23 @@ class PlaybackViewModel @Inject constructor(
     }
 
     /**
-     * Polls the live queue so CMS duration updates apply mid-slot without restarting playback.
-     * Looks up by queue index so duplicate asset ids keep independent durations.
+     * Polls the live queue so playlist duration overrides can update mid-slot.
+     * Device default changes are frozen at [slotStartConfiguredMs] / [defaultsAtSlotStart]
+     * so the current asset finishes normally.
      */
-    private suspend fun waitForConfiguredDuration(queueIndex: Int, startTime: Instant) {
+    private suspend fun waitForConfiguredDuration(
+        queueIndex: Int,
+        startTime: Instant,
+        slotStartConfiguredMs: Long,
+        defaultsAtSlotStart: DevicePlaybackDurations
+    ) {
         while (true) {
             val asset = playlistAssets.getOrNull(queueIndex) ?: return
-            val targetMs = asset.playbackSlotDurationMs()
+            val targetMs = if (asset.hasExplicitDuration()) {
+                asset.playbackSlotDurationMs(defaultsAtSlotStart)
+            } else {
+                slotStartConfiguredMs
+            }.coerceAtLeast(1L)
             val elapsed = Duration.between(startTime, Instant.now()).toMillis()
             if (elapsed >= targetMs) {
                 PlaybackEngineLogger.logDurationUsedDuringPlayback(
@@ -786,7 +825,9 @@ class PlaybackViewModel @Inject constructor(
             assetName = asset.name,
             playlistName = playlistName,
             contentType = DocumentFormat.popContentLabel(asset),
-            configuredDurationSeconds = (asset.playbackSlotDurationMs() / 1000L).toInt().coerceAtLeast(1),
+            configuredDurationSeconds = (
+                asset.playbackSlotDurationMs(deviceConfigManager.playbackDurations.value) / 1000L
+            ).toInt().coerceAtLeast(1),
             slotStartTime = Instant.now()
         )
         if (!asset.deferPopStartUntilReady()) {
