@@ -18,23 +18,26 @@ import javax.inject.Singleton
 class DeviceLogCollector @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    private val logDir = File(context.filesDir, "enterprise_logs")
-    private val logFile = File(logDir, "device.log")
+    // Resolved lazily and defensively: this singleton can be constructed while the user is
+    // still locked (a direct-boot-aware receiver starts the process), and credential-
+    // protected storage does not exist yet at that point.
+    private val logDir: File? by lazy {
+        runCatching { File(context.filesDir, "enterprise_logs").apply { mkdirs() } }.getOrNull()
+    }
+    private val logFile: File? by lazy { logDir?.let { File(it, "device.log") } }
     private val lock = Any()
     private val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
-
-    init {
-        logDir.mkdirs()
-    }
 
     fun log(category: String, message: String) {
         val line = "${formatter.format(Date())} [$category] $message\n"
         synchronized(lock) {
             try {
-                if (logFile.length() > MAX_LOG_BYTES) {
-                    rotateLog()
+                logFile?.let { file ->
+                    if (file.length() > MAX_LOG_BYTES) {
+                        rotateLog()
+                    }
+                    file.appendText(line)
                 }
-                logFile.appendText(line)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to write log: ${e.message}")
             }
@@ -52,19 +55,22 @@ class DeviceLogCollector @Inject constructor(
     fun logCommand(type: String, result: String) = log("COMMAND", "$type -> $result")
 
     fun readLogs(): String = synchronized(lock) {
-        if (!logFile.exists()) return ""
-        runCatching { logFile.readText() }.getOrDefault("")
+        val file = logFile ?: return ""
+        if (!file.exists()) return ""
+        runCatching { file.readText() }.getOrDefault("")
     }
 
     fun clearLogs() = synchronized(lock) {
-        logFile.delete()
-        File(logDir, "device.log.old").delete()
+        logFile?.delete()
+        logDir?.let { File(it, "device.log.old").delete() }
+        Unit
     }
 
     private fun rotateLog() {
-        val old = File(logDir, "device.log.old")
+        val dir = logDir ?: return
+        val old = File(dir, "device.log.old")
         old.delete()
-        logFile.renameTo(old)
+        logFile?.renameTo(old)
     }
 
     companion object {

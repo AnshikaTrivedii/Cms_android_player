@@ -331,3 +331,15 @@ val MIGRATION_11_12 = object : Migration(11, 12) {
         db.execSQL("ALTER TABLE cached_assets_new RENAME TO cached_assets")
     }
 }
+
+/**
+ * Persist PoP identity fields so schedule switches keep device/playlist/asset ids.
+ */
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE pop_logs ADD COLUMN deviceId TEXT")
+        db.execSQL("ALTER TABLE pop_logs ADD COLUMN playlistId TEXT")
+        db.execSQL("ALTER TABLE pop_logs ADD COLUMN assetId TEXT")
+    }
+}
+

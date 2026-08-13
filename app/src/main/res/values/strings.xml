@@ -11,8 +11,13 @@
     <string name="foreground_service_channel_description">Keeps playback, sync, and cache alive 24x7</string>
     <string name="foreground_service_title">Orion Player Running</string>
     <string name="foreground_service_text">Protecting playback, sync, and offline cache</string>
+    <string name="foreground_service_boot_text">Starting player after device boot</string>
+    <string name="foreground_service_boot_channel_name">Orion Player Boot Launch</string>
+    <string name="foreground_service_boot_channel_description">Used only after reboot to bring the player on screen</string>
     <string name="watchdog_channel_name">Orion Player Service</string>
     <string name="watchdog_channel_description">Keeps the digital signage player running 24/7</string>
     <string name="watchdog_notification_title">Orion Player Active</string>
     <string name="watchdog_notification_text">Monitoring playback and device health</string>
+    <string name="device_admin_label">Orion Signage Device Owner</string>
+    <string name="device_admin_description">Required only on dedicated signage devices, to keep Orion Player locked to the screen and launching automatically after every boot.</string>
 </resources>

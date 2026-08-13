@@ -10,7 +10,10 @@ import java.time.Instant
  */
 data class PopLogRecord(
     val deviceName: String,
+    val deviceId: String? = null,
+    val playlistId: String? = null,
     val playlistName: String,
+    val assetId: String? = null,
     val assetName: String,
     val startTime: Instant,
     val endTime: Instant,
@@ -19,7 +22,10 @@ data class PopLogRecord(
 ) {
     fun toEntity(): PopLogEntity = PopLogEntity(
         deviceName = deviceName,
+        deviceId = deviceId,
+        playlistId = playlistId,
         playlistName = playlistName,
+        assetId = assetId,
         assetName = assetName,
         startTime = startTime.toString(),
         endTime = endTime.toString(),
@@ -31,6 +37,9 @@ data class PopLogRecord(
         assetName = assetName,
         content = assetName,
         playlistName = playlistName,
+        playlistId = playlistId,
+        assetId = assetId,
+        deviceId = deviceId,
         startTime = startTime.toString(),
         timestamp = startTime.toString(),
         endTime = endTime.toString(),
@@ -45,11 +54,17 @@ data class PopLogRecord(
             assetName: String,
             startTime: Instant,
             endTime: Instant,
-            durationSeconds: Int = Duration.between(startTime, endTime).seconds.toInt().coerceAtLeast(0)
+            durationSeconds: Int = Duration.between(startTime, endTime).seconds.toInt().coerceAtLeast(0),
+            deviceId: String? = null,
+            playlistId: String? = null,
+            assetId: String? = null
         ): PopLogRecord {
             return PopLogRecord(
                 deviceName = deviceName,
+                deviceId = deviceId,
+                playlistId = playlistId,
                 playlistName = playlistName,
+                assetId = assetId,
                 assetName = assetName,
                 startTime = startTime,
                 endTime = endTime,
@@ -63,10 +78,16 @@ data class PopLogRecord(
             playlistName: String,
             assetName: String,
             startTime: Instant,
-            endTime: Instant = startTime
+            endTime: Instant = startTime,
+            deviceId: String? = null,
+            playlistId: String? = null,
+            assetId: String? = null
         ): PopLogRecord = PopLogRecord(
             deviceName = deviceName,
+            deviceId = deviceId,
+            playlistId = playlistId,
             playlistName = playlistName,
+            assetId = assetId,
             assetName = assetName,
             startTime = startTime,
             endTime = endTime,

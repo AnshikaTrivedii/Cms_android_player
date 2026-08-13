@@ -2,6 +2,7 @@ package com.orion.player
 
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowInsets
@@ -17,6 +18,10 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.orion.player.data.config.DeviceConfigManager
 import com.orion.player.data.config.DisplayOrientation
 import com.orion.player.data.local.SecurePrefs
+import com.orion.player.data.recovery.AutoStartCoordinator
+import com.orion.player.data.recovery.AutoStartLogger
+import com.orion.player.data.recovery.BootStateStore
+import com.orion.player.data.recovery.KioskController
 import com.orion.player.data.recovery.OrionRecoveryLogger
 import com.orion.player.data.recovery.PlayerHealthMonitor
 import com.orion.player.data.recovery.PlayerLaunchHelper
@@ -39,18 +44,25 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var healthMonitor: PlayerHealthMonitor
     @Inject lateinit var deviceConfigManager: DeviceConfigManager
 
+    private var launchSource: String = "activity.onCreate"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val launchSource = intent?.getStringExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE)
+        launchSource = intent?.getStringExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE)
             ?: "activity.onCreate"
         OrionRecoveryLogger.logPlayerStarted(launchSource)
+        if (launchSource.startsWith("boot.")) {
+            AutoStartLogger.bootRecovery(launchSource)
+        }
+        applyHomeAppRoleIfConfigured()
 
         if (securePrefs.isPaired && securePrefs.deviceToken.isNullOrBlank()) {
             securePrefs.clearCredentials()
         }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        keepScreenAwakeForSignage()
         enableEdgeToEdge()
         setupImmersiveMode()
         applyDisplayOrientation(deviceConfigManager.orientation.value)
@@ -80,11 +92,25 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         healthMonitor.recordActivityResumed()
+        // The only reliable proof that the player reached the screen: a background
+        // activity start that the platform blocks fails silently.
+        AutoStartCoordinator.onPlayerVisible(this, launchSource)
+        AutoStartLogger.homeAppStatus(AutoStartCoordinator.isDefaultHomeApp(this))
     }
 
     override fun onStop() {
         healthMonitor.recordActivityPaused()
+        AutoStartCoordinator.onPlayerHidden()
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        // Only a deliberate finish counts as a clean stop; anything else leaves the
+        // running marker set so the next process start is reported as a recovery.
+        if (isFinishing) {
+            BootStateStore.from(this).markPlayerStopped()
+        }
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -105,6 +131,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         intent.getStringExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE)?.let { source ->
+            launchSource = source
             OrionRecoveryLogger.logPlayerStarted(source)
         }
     }
@@ -121,17 +148,41 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyKioskModeIfEnabled() {
-        if (!securePrefs.kioskModeEnabled) return
-        OrionRecoveryLogger.logKioskModeEnabled(true)
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                startLockTask()
-            }
-        } catch (_: IllegalStateException) {
-            // Lock task requires device owner or screen pinning approval on some devices.
-        } catch (_: SecurityException) {
-            // HOME launcher category still keeps the player as the default shell.
+        val kioskRequested = securePrefs.kioskModeEnabled
+        if (kioskRequested) {
+            OrionRecoveryLogger.logKioskModeEnabled(true)
+            KioskController.ensureLockTaskAllowed(this)
         }
+        KioskController.applyIfPermitted(this, kioskRequested)
+    }
+
+    /**
+     * A signage panel must show content even when the device boots to a lock screen.
+     * FLAG_KEEP_SCREEN_ON alone does not wake the display or draw over the keyguard, and
+     * these window flags are scoped to this Activity rather than disabling power
+     * management for the whole device.
+     */
+    private fun keepScreenAwakeForSignage() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+        if (securePrefs.kioskModeEnabled) {
+            @Suppress("DEPRECATION")
+            window.addFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
+        }
+    }
+
+    /** Home-app takeover is opt-in and only possible on a device-owner provisioned device. */
+    private fun applyHomeAppRoleIfConfigured() {
+        if (!securePrefs.homeAppModeEnabled) return
+        KioskController.applyHomeAppRole(this, enabled = true)
     }
 
     private fun bringPlayerToForeground(source: String) {

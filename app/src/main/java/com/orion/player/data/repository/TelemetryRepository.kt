@@ -154,10 +154,13 @@ class TelemetryRepository @Inject constructor(
                     elapsedMs = System.currentTimeMillis() - started
                 )
                 if (e.code() == 401) {
-                    deviceRegistrationManager.handleStatus(
-                        DeviceRegistrationStatusParser.fromUnauthorized(lastBody, e.message())
-                    )
-                    return null
+                    val status = DeviceRegistrationStatusParser.fromUnauthorized(lastBody, e.message())
+                    if (status != null) {
+                        deviceRegistrationManager.handleStatus(status)
+                        return null
+                    }
+                    Log.w(TAG, "Heartbeat 401 without unregister — retrying without unpairing")
+                    continue@attemptLoop
                 }
                 if (e.code() in 400..499 && e.code() != 408 && e.code() != 429) {
                     break@attemptLoop
@@ -564,6 +567,9 @@ class TelemetryRepository @Inject constructor(
             assetName = assetName,
             content = assetName,
             playlistName = playlistName,
+            playlistId = playlistId,
+            assetId = assetId,
+            deviceId = deviceId,
             startTime = start,
             timestamp = start,
             endTime = endTime,

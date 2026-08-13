@@ -12,6 +12,21 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Makes the app appear in Settings → Special app access → Display over other apps.
+         The user still has to enable it there; declaring the permission is what lists it. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Lets a high-priority boot notification try to bring MainActivity forward when
+         background activity starts are blocked. Still not a substitute for Home-app role. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!-- Signage panels have no touchscreen and Android TV requires leanback to be declared.
+         Both are optional so the same APK installs on tablets and TV boxes. -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
 
     <application
         android:name=".OrionPlayerApp"
@@ -24,16 +39,21 @@
         android:usesCleartextTraffic="true"
         tools:targetApi="35">
 
+        <!-- singleTask keeps exactly one player task, so every relaunch (boot, watchdog,
+             crash, notification) reuses the running instance instead of stacking one. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="fullSensor"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
             android:theme="@style/Theme.OrionPlayer">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
@@ -50,6 +70,11 @@
                 android:value="24x7 digital signage playback protection, sync, and watchdog" />
         </service>
 
+        <!-- directBootAware so LOCKED_BOOT_COMPLETED is observed before unlock; the receiver
+             only records that event and waits for BOOT_COMPLETED, because the encrypted
+             prefs, database and cache all live in credential-protected storage.
+             The RECEIVE_BOOT_COMPLETED sender permission keeps the boot filter
+             system-only even though the component must be exported. -->
         <receiver
             android:name=".receiver.BootReceiver"
             android:directBootAware="true"
@@ -62,6 +87,33 @@
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="android.intent.action.REBOOT" />
+            </intent-filter>
+            <!-- Relaunch after the player's own APK is updated. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Internal-only: alarm target used to relaunch after a crash-loop backoff. -->
+        <receiver
+            android:name=".receiver.RelaunchReceiver"
+            android:directBootAware="true"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- Inert on a normal install. Only becomes active when the device is explicitly
+             provisioned as a dedicated device (see docs/AUTO_START_PROVISIONING.md). -->
+        <receiver
+            android:name=".receiver.OrionDeviceAdminReceiver"
+            android:description="@string/device_admin_description"
+            android:exported="true"
+            android:label="@string/device_admin_label"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
     </application>

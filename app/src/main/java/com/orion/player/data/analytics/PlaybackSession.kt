@@ -11,6 +11,7 @@ data class PlaybackSession(
     val sessionId: String = UUID.randomUUID().toString(),
     val assetId: String,
     val assetName: String,
+    val playlistId: String? = null,
     val playlistName: String,
     val contentType: String,
     val configuredDurationSeconds: Int,

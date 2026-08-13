@@ -26,6 +26,10 @@ import com.orion.player.data.repository.PlaylistCacheRepository
 import com.orion.player.data.registration.DeviceRegistrationManager
 import com.orion.player.data.registration.DeviceRegistrationStatusParser
 import com.orion.player.data.config.DeviceConfigManager
+import com.orion.player.data.schedule.ActiveScheduleTracker
+import com.orion.player.data.schedule.AssignedPlaylistStore
+import com.orion.player.data.schedule.ScheduleLogger
+import com.orion.player.data.schedule.ScheduleTime
 import com.orion.player.data.ticker.TickerDisplayConfig
 import com.orion.player.data.ticker.TickerLogger
 import com.orion.player.data.ticker.resolveActiveTickers
@@ -100,7 +104,9 @@ class ContentSyncCoordinator @Inject constructor(
     private val syncStateStore: SyncStateStore,
     private val initialSyncCoordinator: InitialSyncCoordinator,
     private val deviceRegistrationManager: DeviceRegistrationManager,
-    private val deviceConfigManager: DeviceConfigManager
+    private val deviceConfigManager: DeviceConfigManager,
+    private val activeScheduleTracker: ActiveScheduleTracker,
+    private val assignedPlaylistStore: AssignedPlaylistStore
 ) {
     companion object {
         private const val TAG = "OrionSync"
@@ -128,6 +134,15 @@ class ContentSyncCoordinator @Inject constructor(
         get() = revisionEndpointAvailable == false
 
     suspend fun loadCachedSnapshot(): PlaybackSnapshot? {
+        if (shouldPreferAssignedFallback()) {
+            assignedPlaylistStore.load()?.let { fallback ->
+                Log.i(
+                    TAG,
+                    "Restoring assigned playlist after schedule expiry playlistId=${fallback.playlistInfo?.id}"
+                )
+                return fallback
+            }
+        }
         val snapshot = playlistCacheRepository.loadSnapshot()
         if (snapshot != null) {
             contentCacheRepository.validateCurrentPlaylistCache()
@@ -194,6 +209,7 @@ class ContentSyncCoordinator @Inject constructor(
                 TAG,
                 "revision_poll revision=${response.revision} syncRequired=${response.syncRequired} " +
                     "playlistId=${response.playlistId.orEmpty()} layoutId=${response.layoutId.orEmpty()} " +
+                    "scheduleId=${response.activeSchedule?.scheduleId.orEmpty()} " +
                     "initialSyncPending=${response.initialSyncPending}"
             )
 
@@ -206,12 +222,19 @@ class ContentSyncCoordinator @Inject constructor(
             val storedRevision = syncStateStore.lastStoredRevision
             val storedPlaylistId = syncStateStore.lastStoredPlaylistId
             val storedLayoutId = syncStateStore.lastStoredLayoutId
+            val scheduleSignal = activeScheduleTracker.observe(
+                schedule = response.activeSchedule,
+                source = "sync-revision",
+                serverTime = response.serverTime
+            )
 
             when {
                 response.syncRequired ->
                     RevisionPollOutcome(shouldSync = true, reason = "syncRequired")
                 response.initialSyncPending ->
                     RevisionPollOutcome(shouldSync = true, reason = "initialSyncPending")
+                scheduleSignal.shouldSync ->
+                    RevisionPollOutcome(shouldSync = true, reason = scheduleSignal.reason)
                 !storedRevision.isNullOrBlank() && response.revision != storedRevision ->
                     RevisionPollOutcome(shouldSync = true, reason = "revision.changed")
                 !response.playlistId.isNullOrBlank() &&
@@ -228,10 +251,14 @@ class ContentSyncCoordinator @Inject constructor(
             when (e.code()) {
                 401 -> {
                     val body = runCatching { e.response()?.errorBody()?.string() }.getOrNull()
-                    deviceRegistrationManager.handleStatus(
-                        DeviceRegistrationStatusParser.fromUnauthorized(body, e.message())
-                    )
-                    RevisionPollOutcome(shouldSync = false, reason = "unpaired")
+                    val status = DeviceRegistrationStatusParser.fromUnauthorized(body, e.message())
+                    if (status != null) {
+                        deviceRegistrationManager.handleStatus(status)
+                        RevisionPollOutcome(shouldSync = false, reason = "unpaired")
+                    } else {
+                        activeScheduleTracker.logTokenRefresh("sync-revision 401")
+                        RevisionPollOutcome(shouldSync = false, reason = "auth.retry")
+                    }
                 }
                 404 -> {
                     revisionEndpointAvailable = false
@@ -291,16 +318,42 @@ class ContentSyncCoordinator @Inject constructor(
                 "sync_start playlistVersion=${playlistVersion ?: "none"} layoutVersion=${layoutVersion ?: "none"} " +
                     "knownAssets=${knownIds?.size ?: 0} recoverCache=$recoverCache missing=${missingAssetIds.size}"
             )
-            var syncResponse = contentRepository.syncPlaylist(
-                playlistVersion = playlistVersion,
-                layoutVersion = layoutVersion,
-                knownAssetIds = knownIds,
-                assetVersions = assetVersions,
-                recoverCache = recoverCache,
-                missingAssetIds = missingAssetIds.takeIf { it.isNotEmpty() }
-            ) ?: return SyncOutcome.Unpaired
+            var syncResponse = try {
+                contentRepository.syncPlaylist(
+                    playlistVersion = playlistVersion,
+                    layoutVersion = layoutVersion,
+                    knownAssetIds = knownIds,
+                    assetVersions = assetVersions,
+                    recoverCache = recoverCache,
+                    missingAssetIds = missingAssetIds.takeIf { it.isNotEmpty() }
+                )
+            } catch (authError: HttpException) {
+                if (authError.code() != 401) throw authError
+                val body = runCatching { authError.response()?.errorBody()?.string() }.getOrNull()
+                val status = DeviceRegistrationStatusParser.fromUnauthorized(body, authError.message())
+                if (status != null) {
+                    deviceRegistrationManager.handleStatus(status)
+                    return@withLock SyncOutcome.Unpaired
+                }
+                activeScheduleTracker.logTokenRefresh("sync 401")
+                contentRepository.syncPlaylist(
+                    playlistVersion = playlistVersion,
+                    layoutVersion = layoutVersion,
+                    knownAssetIds = knownIds,
+                    assetVersions = assetVersions,
+                    recoverCache = recoverCache,
+                    missingAssetIds = missingAssetIds.takeIf { it.isNotEmpty() }
+                )
+            } ?: return SyncOutcome.Unpaired
 
             detectReassignment(cachedSnapshot, syncResponse)
+            activeScheduleTracker.onSyncResponse(
+                schedule = syncResponse.activeSchedule,
+                syncPlaylistId = syncResponse.playlist?.id,
+                syncPlaylistName = syncResponse.playlist?.name,
+                serverTime = syncResponse.serverTime
+            )
+            rememberAssignedPlaylist(cachedSnapshot)
             executeCacheCommand(syncResponse.cacheCommand)
 
             if (syncResponse.isLayoutMode && !PlayerPlaybackConfig.LAYOUT_PLAYBACK_ENABLED) {
@@ -347,6 +400,11 @@ class ContentSyncCoordinator @Inject constructor(
                 remoteVersion = syncResponse.playlistVersion
             )
 
+            outcomeIfStaleScheduledPlaylist(
+                syncPlaylistId = syncResponse.playlist?.id,
+                cachedPlaylistId = cachedSnapshot?.playlistInfo?.id
+            )?.let { return it.withSuccessfulSyncTimestamp() }
+
             if (syncResponse.unchanged) {
                 val refreshOutcome = handleUnchangedSyncResponse(
                     syncResponse = syncResponse,
@@ -364,10 +422,15 @@ class ContentSyncCoordinator @Inject constructor(
         } catch (e: HttpException) {
             if (e.code() == 401) {
                 val body = runCatching { e.response()?.errorBody()?.string() }.getOrNull()
-                deviceRegistrationManager.handleStatus(
-                    DeviceRegistrationStatusParser.fromUnauthorized(body, e.message())
-                )
-                SyncOutcome.Unpaired
+                val status = DeviceRegistrationStatusParser.fromUnauthorized(body, e.message())
+                if (status != null) {
+                    deviceRegistrationManager.handleStatus(status)
+                    SyncOutcome.Unpaired
+                } else {
+                    activeScheduleTracker.logTokenRefresh("sync 401 unrecovered")
+                    val message = NetworkDiagnostics.userMessage("GET /player/sync", e)
+                    fallbackOrFail(current = current, message = message)
+                }
             } else {
                 val message = NetworkDiagnostics.userMessage("GET /player/sync", e)
                 SyncDiagnostics.logSyncFailed(message, e)
@@ -893,6 +956,10 @@ class ContentSyncCoordinator @Inject constructor(
 
         val mergedFiles = buildLocalFileMap(newAssets, newFiles, current)
         SyncDiagnostics.logPlayabilityCheck(newAssets, mergedFiles)
+        activeScheduleTracker.onAssetsDownloaded(
+            downloaded = newFiles.size,
+            playlistAssetCount = newAssets.size
+        )
 
         val pendingCount = newAssets.count { asset ->
             asset.assetTypeRequiresDownload() &&
@@ -902,6 +969,7 @@ class ContentSyncCoordinator @Inject constructor(
         }
         if (pendingCount > 0) {
             Log.w(TAG, "Sync incomplete: $pendingCount assets still pending")
+            activeScheduleTracker.onSwitchFailed("$pendingCount assets still downloading")
             cacheReportRepository.reportPartialSync(
                 syncResponse = syncResponse,
                 pendingDownloadCount = pendingCount,
@@ -919,6 +987,7 @@ class ContentSyncCoordinator @Inject constructor(
                 .filterNot { it.isPlayable(mergedFiles) }
                 .joinToString { "${it.name}(${it.type})" }
             Log.e(TAG, "No playable content after sync. Failed: $failedDetails")
+            activeScheduleTracker.onSwitchFailed("no playable content: $failedDetails")
             cacheReportRepository.reportPartialSync(
                 syncResponse = syncResponse,
                 pendingDownloadCount = pendingCount,
@@ -930,8 +999,10 @@ class ContentSyncCoordinator @Inject constructor(
             )
         }
 
-        val keepKeys = syncResponse.resolvedCurrentAssetIds()
-            .ifEmpty { newAssets.map { it.id }.toSet() }
+        val keepKeys = (
+            syncResponse.resolvedCurrentAssetIds()
+                .ifEmpty { newAssets.map { it.id }.toSet() }
+            ) + assignedPlaylistStore.keepAssetIds()
         contentRepository.cleanupStaleCache(keepKeys)
         for (removedId in syncResponse.resolvedRemovedAssetIds()) {
             if (removedId !in keepKeys) {
@@ -971,6 +1042,44 @@ class ContentSyncCoordinator @Inject constructor(
         )
         SyncDiagnostics.logOutcome("Updated", "playable=${mergedFiles.size} assets mode=${snapshot.mode}")
         return SyncOutcome.Updated(snapshot = snapshot, structureChanged = structureChanged)
+    }
+
+    private fun shouldPreferAssignedFallback(): Boolean {
+        if (securePrefs.scheduleCompletionPending) return true
+        return ScheduleTime.isExpired(
+            securePrefs.activeScheduleStart,
+            securePrefs.activeScheduleEnd
+        )
+    }
+
+    private fun rememberAssignedPlaylist(current: PlaybackSnapshot?) {
+        val snapshot = current ?: return
+        if (activeScheduleTracker.shouldPreserveCurrentAsAssigned(snapshot.playlistInfo?.id)) {
+            assignedPlaylistStore.save(snapshot)
+        }
+    }
+
+    private suspend fun outcomeIfStaleScheduledPlaylist(
+        syncPlaylistId: String?,
+        cachedPlaylistId: String?
+    ): SyncOutcome? {
+        val candidate = syncPlaylistId?.takeIf { it.isNotBlank() } ?: cachedPlaylistId
+        if (!activeScheduleTracker.isStaleScheduledPlaylist(candidate)) return null
+        val fallback = assignedPlaylistStore.load()
+        if (fallback != null) {
+            playlistCacheRepository.saveSnapshot(fallback)
+            ScheduleLogger.reconcile(
+                scheduleId = securePrefs.expiredScheduleId,
+                nextPlaylistId = fallback.playlistInfo?.id
+            )
+            return SyncOutcome.Updated(
+                snapshot = fallback,
+                structureChanged = true,
+                fromCache = true
+            )
+        }
+        Log.i(TAG, "CMS still serving expired schedule playlistId=$candidate — not re-applying")
+        return SyncOutcome.Unchanged
     }
 
     private fun layoutHasPlayableContent(

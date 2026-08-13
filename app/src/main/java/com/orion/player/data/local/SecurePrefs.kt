@@ -41,12 +41,21 @@ class SecurePrefs @Inject constructor(
         private const val KEY_PAIRING_SECRET = "pairing_secret"
         private const val KEY_PAIRING_CODE = "pairing_code"
         private const val KEY_KIOSK_MODE = "kiosk_mode_enabled"
+        private const val KEY_HOME_APP_MODE = "home_app_mode_enabled"
         private const val KEY_LAST_SUCCESSFUL_SYNC_AT = "last_successful_sync_at"
         private const val KEY_SYNC_INTERVAL_SECONDS = "sync_interval_seconds"
         private const val KEY_REVISION_POLL_INTERVAL_SECONDS = "revision_poll_interval_seconds"
         private const val KEY_LAST_STORED_REVISION = "last_stored_revision"
         private const val KEY_LAST_STORED_PLAYLIST_ID = "last_stored_playlist_id"
         private const val KEY_LAST_STORED_LAYOUT_ID = "last_stored_layout_id"
+        private const val KEY_ACTIVE_SCHEDULE_ID = "active_schedule_id"
+        private const val KEY_ACTIVE_SCHEDULE_PLAYLIST_ID = "active_schedule_playlist_id"
+        private const val KEY_ACTIVE_SCHEDULE_START = "active_schedule_start"
+        private const val KEY_ACTIVE_SCHEDULE_END = "active_schedule_end"
+        private const val KEY_SCHEDULE_COMPLETION_PENDING = "schedule_completion_pending"
+        private const val KEY_EXPIRED_SCHEDULE_ID = "expired_schedule_id"
+        private const val KEY_EXPIRED_SCHEDULE_PLAYLIST_ID = "expired_schedule_playlist_id"
+        private const val KEY_ACTIVE_PLAYLIST_NAME = "active_playlist_name"
         private const val KEY_PAIRED_AT_MS = "paired_at_ms"
         private const val KEY_INITIAL_DOWNLOAD_STARTED = "initial_download_started"
         private const val KEY_INITIAL_SYNC_TIMEOUT_SECONDS = "initial_sync_timeout_seconds"
@@ -135,6 +144,14 @@ class SecurePrefs @Inject constructor(
         get() = prefs.getBoolean(KEY_KIOSK_MODE, PlayerRuntimeConfig.KIOSK_MODE_ENABLED_DEFAULT)
         set(value) = prefs.edit().putBoolean(KEY_KIOSK_MODE, value).apply()
 
+    /**
+     * Opt-in: on a device-owner provisioned device, make Orion the persistent Home app.
+     * Off by default so a normal install never replaces the user's launcher.
+     */
+    var homeAppModeEnabled: Boolean
+        get() = prefs.getBoolean(KEY_HOME_APP_MODE, false)
+        set(value) = prefs.edit().putBoolean(KEY_HOME_APP_MODE, value).apply()
+
     var lastSuccessfulSyncAt: String?
         get() = prefs.getString(KEY_LAST_SUCCESSFUL_SYNC_AT, null)
         set(value) = prefs.edit().putString(KEY_LAST_SUCCESSFUL_SYNC_AT, value).apply()
@@ -217,6 +234,46 @@ class SecurePrefs @Inject constructor(
     var lastStoredPlaylistId: String?
         get() = prefs.getString(KEY_LAST_STORED_PLAYLIST_ID, null)
         set(value) = prefs.edit().putString(KEY_LAST_STORED_PLAYLIST_ID, value).apply()
+
+    /** Schedule whose playlist is currently on screen; null when none is active. */
+    var activeScheduleId: String?
+        get() = prefs.getString(KEY_ACTIVE_SCHEDULE_ID, null)
+        set(value) = prefs.edit().putString(KEY_ACTIVE_SCHEDULE_ID, value).apply()
+
+    var activeSchedulePlaylistId: String?
+        get() = prefs.getString(KEY_ACTIVE_SCHEDULE_PLAYLIST_ID, null)
+        set(value) = prefs.edit().putString(KEY_ACTIVE_SCHEDULE_PLAYLIST_ID, value).apply()
+
+    /** CMS startDateTime for the committed schedule; used to ignore expired windows. */
+    var activeScheduleStart: String?
+        get() = prefs.getString(KEY_ACTIVE_SCHEDULE_START, null)
+        set(value) = prefs.edit().putString(KEY_ACTIVE_SCHEDULE_START, value).apply()
+
+    var activeScheduleEnd: String?
+        get() = prefs.getString(KEY_ACTIVE_SCHEDULE_END, null)
+        set(value) = prefs.edit().putString(KEY_ACTIVE_SCHEDULE_END, value).apply()
+
+    /**
+     * True after the player locally observed endDateTime and is waiting for CMS
+     * to name the next schedule or the assigned playlist.
+     */
+    var scheduleCompletionPending: Boolean
+        get() = prefs.getBoolean(KEY_SCHEDULE_COMPLETION_PENDING, false)
+        set(value) = prefs.edit().putBoolean(KEY_SCHEDULE_COMPLETION_PENDING, value).apply()
+
+    /** Last schedule that reached endDateTime; used to reject a lagging CMS playlist. */
+    var expiredScheduleId: String?
+        get() = prefs.getString(KEY_EXPIRED_SCHEDULE_ID, null)
+        set(value) = prefs.edit().putString(KEY_EXPIRED_SCHEDULE_ID, value).apply()
+
+    var expiredSchedulePlaylistId: String?
+        get() = prefs.getString(KEY_EXPIRED_SCHEDULE_PLAYLIST_ID, null)
+        set(value) = prefs.edit().putString(KEY_EXPIRED_SCHEDULE_PLAYLIST_ID, value).apply()
+
+    /** Name of the playlist currently on screen, kept for schedule-switch logs. */
+    var activePlaylistName: String?
+        get() = prefs.getString(KEY_ACTIVE_PLAYLIST_NAME, null)
+        set(value) = prefs.edit().putString(KEY_ACTIVE_PLAYLIST_NAME, value).apply()
 
     var lastStoredLayoutId: String?
         get() = prefs.getString(KEY_LAST_STORED_LAYOUT_ID, null)
@@ -304,6 +361,14 @@ class SecurePrefs @Inject constructor(
             .remove(KEY_LAST_STORED_REVISION)
             .remove(KEY_LAST_STORED_PLAYLIST_ID)
             .remove(KEY_LAST_STORED_LAYOUT_ID)
+            .remove(KEY_ACTIVE_SCHEDULE_ID)
+            .remove(KEY_ACTIVE_SCHEDULE_PLAYLIST_ID)
+            .remove(KEY_ACTIVE_SCHEDULE_START)
+            .remove(KEY_ACTIVE_SCHEDULE_END)
+            .remove(KEY_SCHEDULE_COMPLETION_PENDING)
+            .remove(KEY_EXPIRED_SCHEDULE_ID)
+            .remove(KEY_EXPIRED_SCHEDULE_PLAYLIST_ID)
+            .remove(KEY_ACTIVE_PLAYLIST_NAME)
             .remove(KEY_POP_UPLOAD_CONFIGURED)
             .remove(KEY_POP_UPLOAD_ENABLED)
             .remove(KEY_POP_LAST_GENERATED_AT)

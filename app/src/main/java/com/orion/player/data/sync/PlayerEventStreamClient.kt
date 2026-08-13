@@ -22,7 +22,8 @@ import javax.inject.Singleton
  * Falls back silently when the endpoint is unavailable (404 / connection errors).
  *
  * Expected backend endpoint: GET /api/player/events (text/event-stream)
- * Events: content.updated, playlist.updated, ticker.updated, sync.required
+ * Events: content.updated, playlist.updated, ticker.updated, sync.required,
+ * schedule.started, schedule.ended, schedule.updated
  */
 @Singleton
 class PlayerEventStreamClient @Inject constructor(
@@ -152,7 +153,11 @@ class PlayerEventStreamClient @Inject constructor(
             "ticker.updated",
             "sync.required",
             "content-updated",
-            "playlist-updated"
+            "playlist-updated",
+            "schedule.started",
+            "schedule.ended",
+            "schedule.updated",
+            "schedule-updated"
         )
 
         private val REVISION_REGEX = Regex(""""revision"\s*:\s*"([^"]+)"""")

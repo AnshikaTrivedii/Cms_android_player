@@ -8,6 +8,7 @@ import com.orion.player.data.analytics.PopSessionLogger
 import com.orion.player.data.analytics.PopSessionRecorder
 import com.orion.player.data.cache.CacheDownloadLogger
 import com.orion.player.data.local.SecurePrefs
+import com.orion.player.data.recovery.AutoStartLogger
 import com.orion.player.data.recovery.OrionRecoveryLogger
 import com.orion.player.data.recovery.PlaybackRecoveryCoordinator
 import com.orion.player.data.recovery.PlayerHealthMonitor
@@ -33,6 +34,10 @@ import com.orion.player.data.analytics.PopLogFlushScheduler
 import com.orion.player.data.config.DeviceConfigManager
 import com.orion.player.data.registration.DeviceRegistrationManager
 import com.orion.player.data.repository.TelemetryRepository
+import com.orion.player.data.schedule.ActiveScheduleTracker
+import com.orion.player.data.schedule.AssignedPlaylistStore
+import com.orion.player.data.schedule.ScheduleExpiryController
+import com.orion.player.data.schedule.ScheduleLogger
 import com.orion.player.data.telemetry.DeviceHeartbeatScheduler
 import com.orion.player.data.sync.ContentSyncCoordinator
 import com.orion.player.data.sync.ContentSyncScheduler
@@ -82,7 +87,10 @@ class PlaybackViewModel @Inject constructor(
     private val postPairingBootstrap: PostPairingBootstrap,
     private val deviceRegistrationManager: DeviceRegistrationManager,
     private val popLogFlushScheduler: PopLogFlushScheduler,
-    private val deviceConfigManager: DeviceConfigManager
+    private val deviceConfigManager: DeviceConfigManager,
+    private val activeScheduleTracker: ActiveScheduleTracker,
+    private val assignedPlaylistStore: AssignedPlaylistStore,
+    private val scheduleExpiryController: ScheduleExpiryController
 ) : ViewModel() {
 
     companion object {
@@ -106,6 +114,7 @@ class PlaybackViewModel @Inject constructor(
 
     private var activePopSession: PlaybackSession? = null
     private var pendingSnapshot: PlaybackSnapshot? = null
+    private var pendingSnapshotFromSync = false
 
     private var advanceJob: Job? = null
     private var slotGeneration = 0
@@ -151,6 +160,7 @@ class PlaybackViewModel @Inject constructor(
         contentSyncCoordinator.registerRetrySyncHandler {
             requestContentSync(force = true, reason = "sync.retry")
         }
+        startScheduleExpiryController()
         initialSyncCoordinator.registerSyncHandler { reason, commandId ->
             executeForcedSync(reason, commandId)
         }
@@ -207,8 +217,11 @@ class PlaybackViewModel @Inject constructor(
                 ensureBackgroundServicesStarted()
             }
             SyncDiagnostics.logStartupDevice(securePrefs)
+            AutoStartLogger.playerInitStart("playback.start")
             healthMonitor.recordPlaybackExpected(securePrefs.isAuthenticated())
 
+            // Cache first, always: content must appear without waiting for the CMS or
+            // for the network to come up after a reboot.
             val cached = contentSyncCoordinator.loadCachedSnapshot()
             if (cached != null && snapshotIsPlayable(cached)) {
                 OrionRecoveryLogger.logCachedPlaylistLoaded(
@@ -216,12 +229,20 @@ class PlaybackViewModel @Inject constructor(
                     playlistName = cached.playlistInfo?.name.orEmpty()
                 )
                 applySnapshot(cached, structureChanged = true)
+                AutoStartLogger.cachePlaybackStart(
+                    playlistId = cached.playlistInfo?.id,
+                    playlistName = cached.playlistInfo?.name,
+                    assetCount = cached.playlistAssets.size
+                )
                 OrionRecoveryLogger.logPlaybackStarted("cache")
                 deviceLogCollector.logPlayback(
                     "Started from cache: ${cached.playlistInfo?.name} assets=${cached.playlistAssets.size}"
                 )
                 ensureBackgroundServicesStarted()
             } else {
+                AutoStartLogger.cachePlaybackUnavailable(
+                    if (cached == null) "no cached playlist" else "cached assets not playable"
+                )
                 _uiState.value = PlaybackUiState.Loading
             }
             updatePlaybackHealthState()
@@ -229,6 +250,7 @@ class PlaybackViewModel @Inject constructor(
             if (isDisplayingContent()) {
                 OrionRecoveryLogger.logBackgroundSyncStarted("startup")
             }
+            AutoStartLogger.cmsSyncStart()
             val outcome = withContext(Dispatchers.IO) {
                 contentSyncCoordinator.syncContent(
                     current = currentSnapshot(),
@@ -254,6 +276,11 @@ class PlaybackViewModel @Inject constructor(
                     }
                 }
                 is SyncOutcome.Failed -> {
+                    // Offline or CMS unreachable: cached playback keeps running untouched.
+                    AutoStartLogger.cmsSyncFailed(
+                        reason = outcome.message.ifBlank { "content download failed" },
+                        playingFromCache = isDisplayingContent()
+                    )
                     if (!isDisplayingContent()) {
                         val reason = outcome.message.ifBlank { "Content download failed" }
                         SyncDiagnostics.logWaitingScreen(reason, "startPlayback.Failed")
@@ -261,11 +288,13 @@ class PlaybackViewModel @Inject constructor(
                     }
                 }
                 is SyncOutcome.Updated -> {
+                    AutoStartLogger.cmsSyncSuccess("updated")
                     applySnapshotIfPlayable(outcome.snapshot, outcome.structureChanged)
                     telemetryRepository.flushAll()
                     reportSuccessfulSyncToCms()
                 }
                 is SyncOutcome.Unchanged -> {
+                    AutoStartLogger.cmsSyncSuccess("unchanged")
                     if (!isDisplayingContent()) {
                         val fallback = contentSyncCoordinator.loadCachedSnapshot()
                         if (fallback != null && snapshotIsPlayable(fallback)) {
@@ -293,6 +322,7 @@ class PlaybackViewModel @Inject constructor(
             slotGeneration++
             advanceJob?.cancel()
             pendingSnapshot = null
+            pendingSnapshotFromSync = false
 
             val cached = contentSyncCoordinator.loadCachedSnapshot()
             if (cached != null && snapshotIsPlayable(cached)) {
@@ -326,10 +356,124 @@ class PlaybackViewModel @Inject constructor(
             networkMonitor.observeOnline().collect { online ->
                 if (online) {
                     telemetryRepository.flushAll()
-                    requestContentSync(force = true, reason = "network.reconnected")
+                    val pending = activeScheduleTracker.reconcileAfterReconnect()
+                    val reason = if (pending.shouldSync) {
+                        pending.reason ?: "network.reconnected"
+                    } else {
+                        "network.reconnected"
+                    }
+                    if (pending.shouldSync && pending.reason == ActiveScheduleTracker.REASON_ENDED) {
+                        leaveExpiredSchedule(reason)
+                    } else {
+                        requestContentSync(force = true, reason = reason)
+                    }
                 }
             }
         }
+    }
+
+    /**
+     * One expiry timer for the active schedule. Fires at endDateTime using
+     * synchronized server time and immediately updates the playback source.
+     */
+    private fun startScheduleExpiryController() {
+        scheduleExpiryController.setOnExpired {
+            viewModelScope.launch {
+                leaveExpiredSchedule(reason = "SCHEDULE_EXPIRED")
+            }
+        }
+    }
+
+    /**
+     * Stop treating the expired scheduled playlist as the playback source.
+     * Finalizes the current asset's PoP, switches immediately, then reconciles
+     * with CMS. Does not restart the app, stop the service, unpair, or delete assets.
+     */
+    private fun leaveExpiredSchedule(reason: String) {
+        viewModelScope.launch {
+            val fromPlaylist = playlistInfo?.name ?: playlistInfo?.id
+
+            activePopSession?.takeIf { !it.finalized }?.let { session ->
+                val elapsed = elapsedSecondsSince(session.effectiveStartTime(), Instant.now())
+                finalizePopSession("VERIFIED", session, actualElapsedSeconds = elapsed)
+            }
+
+            activeScheduleTracker.onExpiryTimerFired()
+            activeScheduleTracker.consumeLocalExpiry(source = reason)
+
+            val expiredPlaylistId = securePrefs.expiredSchedulePlaylistId
+            if (expiredPlaylistId != null &&
+                playlistInfo?.id != null &&
+                playlistInfo?.id != expiredPlaylistId
+            ) {
+                requestContentSync(force = true, reason = reason)
+                return@launch
+            }
+
+            slotGeneration++
+            videoStopToken++
+            advanceJob?.cancel()
+            pendingSnapshot = null
+            pendingSnapshotFromSync = false
+
+            val fallback = withContext(Dispatchers.IO) { assignedPlaylistStore.load() }
+            if (fallback != null && snapshotIsPlayable(fallback)) {
+                if (playlistInfo?.id != fallback.playlistInfo?.id) {
+                    applySnapshotImmediate(fallback, fromSync = true)
+                    ScheduleLogger.playbackSwitch(
+                        from = fromPlaylist,
+                        to = fallback.playlistInfo?.name ?: fallback.playlistInfo?.id,
+                        reason = "SCHEDULE_EXPIRED"
+                    )
+                }
+                ScheduleLogger.reconcile(
+                    scheduleId = securePrefs.expiredScheduleId,
+                    nextPlaylistId = fallback.playlistInfo?.id
+                )
+            } else if (expiredPlaylistId != null && playlistInfo?.id == expiredPlaylistId) {
+                ScheduleLogger.playbackSwitch(
+                    from = fromPlaylist,
+                    to = "none",
+                    reason = "SCHEDULE_EXPIRED"
+                )
+                stopPlayback()
+                _uiState.value = PlaybackUiState.NoContent
+            }
+
+            requestContentSync(force = true, reason = reason)
+        }
+    }
+
+    /** Replace the playing queue now. Do not keep the expired playlist on screen. */
+    private fun applySnapshotImmediate(
+        snapshot: PlaybackSnapshot,
+        fromSync: Boolean
+    ) {
+        val normalized = normalizedSnapshot(snapshot)
+        val newAssets = normalized.playlistAssets
+        pendingSnapshot = null
+        pendingSnapshotFromSync = false
+        mode = PlaybackMode.FULL_SCREEN
+        assets = newAssets
+        playlistAssets = newAssets
+        localFiles = normalized.localFiles
+        playlistInfo = normalized.playlistInfo
+        playlistVersion = normalized.playlistVersion
+        currentTickers = normalized.tickers
+        _currentAssetIndex.value = normalized.currentIndex.coerceIn(
+            0,
+            (newAssets.size - 1).coerceAtLeast(0)
+        )
+        healthMonitor.recordQueueProgress(_currentAssetIndex.value)
+        notifyPlaylistLive(fromSync)
+        emitFullScreen()
+        startSlotLoop(resetGeneration = true)
+        PlaybackEngineLogger.logQueueSwapped(
+            oldSize = 0,
+            newSize = newAssets.size,
+            playlistVersion = playlistVersion,
+            newIndex = _currentAssetIndex.value
+        )
     }
 
     private fun startRealtimeSync() {
@@ -420,7 +564,7 @@ class PlaybackViewModel @Inject constructor(
 
     private fun applySnapshotIfPlayable(snapshot: PlaybackSnapshot, structureChanged: Boolean) {
         if (snapshotIsPlayable(snapshot)) {
-            applySnapshot(snapshot, structureChanged)
+            applySnapshot(snapshot, structureChanged, fromSync = true)
         } else if (isDisplayingContent()) {
             PlaybackEngineLogger.logPlaybackContinuedDuringSync(
                 assetName = playlistAssets.getOrNull(_currentAssetIndex.value)?.name.orEmpty(),
@@ -487,7 +631,11 @@ class PlaybackViewModel @Inject constructor(
         )
     }
 
-    private fun applySnapshot(snapshot: PlaybackSnapshot, structureChanged: Boolean) {
+    private fun applySnapshot(
+        snapshot: PlaybackSnapshot,
+        structureChanged: Boolean,
+        fromSync: Boolean = false
+    ) {
         val normalized = normalizedSnapshot(snapshot)
         val newAssets = normalized.playlistAssets
 
@@ -520,6 +668,9 @@ class PlaybackViewModel @Inject constructor(
         if (isDisplayingContent()) {
             mergePlaylistMetadataInPlace(newAssets)
             if (structuralChange) {
+                // Keep the current playlist on screen until the slot ends — a schedule
+                // switch must never blank the display mid-asset.
+                pendingSnapshotFromSync = fromSync
                 stagePendingSnapshot(
                     normalized,
                     reason = when {
@@ -537,6 +688,7 @@ class PlaybackViewModel @Inject constructor(
         }
 
         pendingSnapshot = null
+        pendingSnapshotFromSync = false
         mode = PlaybackMode.FULL_SCREEN
         assets = newAssets
         playlistAssets = newAssets
@@ -566,8 +718,25 @@ class PlaybackViewModel @Inject constructor(
             assetIndex = _currentAssetIndex.value,
             total = playlistAssets.size
         )
+        notifyPlaylistLive(fromSync)
 
         startSlotLoop(resetGeneration = true)
+    }
+
+    /**
+     * Report the playlist that just reached the screen. Only sync-driven playlists
+     * commit schedule state; a cache restore must not clear the active schedule
+     * before the first sync has confirmed what the CMS wants.
+     */
+    private fun notifyPlaylistLive(fromSync: Boolean) {
+        if (fromSync) {
+            activeScheduleTracker.onPlaylistActivated(
+                playlistId = playlistInfo?.id,
+                playlistName = playlistInfo?.name
+            )
+        } else {
+            activeScheduleTracker.onCachedPlaylistRestored(playlistInfo?.name)
+        }
     }
 
     /** Apply latest CMS metadata (duration, name, etc.) without reordering the active queue. */
@@ -823,6 +992,7 @@ class PlaybackViewModel @Inject constructor(
         val session = PlaybackSession(
             assetId = asset.id,
             assetName = asset.name,
+            playlistId = playlistInfo?.id,
             playlistName = playlistName,
             contentType = DocumentFormat.popContentLabel(asset),
             configuredDurationSeconds = (
@@ -882,7 +1052,10 @@ class PlaybackViewModel @Inject constructor(
         val record = if (status == "FAILED") {
             PopLogRecord.failed(
                 deviceName = deviceDisplayName(),
+                deviceId = popDeviceId(),
+                playlistId = active.playlistId ?: playlistInfo?.id,
                 playlistName = active.playlistName,
+                assetId = active.assetId,
                 assetName = active.assetName,
                 startTime = startTime,
                 endTime = endTime
@@ -890,13 +1063,25 @@ class PlaybackViewModel @Inject constructor(
         } else {
             PopLogRecord.verified(
                 deviceName = deviceDisplayName(),
+                deviceId = popDeviceId(),
+                playlistId = active.playlistId ?: playlistInfo?.id,
                 playlistName = active.playlistName,
+                assetId = active.assetId,
                 assetName = active.assetName,
                 startTime = startTime,
                 endTime = endTime,
                 durationSeconds = durationSeconds
             )
         }
+
+        activeScheduleTracker.logPopEvent(
+            playlistId = record.playlistId,
+            assetId = record.assetId,
+            startTime = startTime.toString(),
+            endTime = endTime.toString(),
+            durationSeconds = durationSeconds,
+            status = status
+        )
 
         if (active === activePopSession) {
             activePopSession = null
@@ -907,7 +1092,9 @@ class PlaybackViewModel @Inject constructor(
 
     private fun commitPendingQueueSwap(): Boolean {
         val pending = pendingSnapshot ?: return false
+        val fromSync = pendingSnapshotFromSync
         pendingSnapshot = null
+        pendingSnapshotFromSync = false
         val oldSize = playlistAssets.size
         val newAssets = pending.playlistAssets.ifEmpty { pending.assets }.inPlaylistOrder()
         mode = PlaybackMode.FULL_SCREEN
@@ -934,6 +1121,7 @@ class PlaybackViewModel @Inject constructor(
             assets = playlistAssets,
             currentIndex = _currentAssetIndex.value
         )
+        notifyPlaylistLive(fromSync)
         return true
     }
 
@@ -986,6 +1174,7 @@ class PlaybackViewModel @Inject constructor(
         advanceJob = null
         clearPlaybackState()
         pendingSnapshot = null
+        pendingSnapshotFromSync = false
     }
 
     private fun clearPlaybackState() {
@@ -1008,7 +1197,10 @@ class PlaybackViewModel @Inject constructor(
         advanceJob?.cancel()
         clearPlaybackState()
         pendingSnapshot = null
+        pendingSnapshotFromSync = false
         activePopSession = null
+        activeScheduleTracker.clear()
+        assignedPlaylistStore.clear()
         healthMonitor.recordPlaybackExpected(false)
         _isUnpaired.value = true
     }
@@ -1024,6 +1216,9 @@ class PlaybackViewModel @Inject constructor(
 
     private fun deviceDisplayName(): String =
         securePrefs.deviceName?.takeIf { it.isNotBlank() } ?: "Orion Display"
+
+    private fun popDeviceId(): String =
+        securePrefs.cmsDeviceId?.takeIf { it.isNotBlank() } ?: securePrefs.getOrCreateHardwareId()
 
     fun onAssetFailed(assetName: String) {
         viewModelScope.launch {
@@ -1054,10 +1249,23 @@ fun onUrlLoadFailed(assetName: String) {
 
     private fun handleHeartbeatResponse(response: HeartbeatResponse) {
         contentSyncScheduler.updateInterval(response.syncIntervalSeconds)
-        if (response.syncRequired == true) {
+        val scheduleSignal = activeScheduleTracker.observe(
+            schedule = response.activeSchedule,
+            source = "heartbeat",
+            serverTime = response.serverTime
+        )
+        val expired = activeScheduleTracker.consumeLocalExpiry(source = "heartbeat")
+        if (expired || scheduleSignal.reason == ActiveScheduleTracker.REASON_ENDED) {
+            leaveExpiredSchedule(scheduleSignal.reason ?: "schedule.ended")
+        } else if (response.syncRequired == true) {
             requestContentSync(force = true, reason = "heartbeat.sync_required")
         } else if (contentSyncCoordinator.consumeRevisionIfChanged(response.contentRevision)) {
             requestContentSync(force = true, reason = "heartbeat.revision")
+        } else if (scheduleSignal.shouldSync) {
+            requestContentSync(
+                force = true,
+                reason = scheduleSignal.reason ?: "schedule.changed"
+            )
         }
         viewModelScope.launch {
             try {

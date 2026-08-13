@@ -12,7 +12,10 @@ data class PopLogEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val deviceName: String,
+    val deviceId: String? = null,
+    val playlistId: String? = null,
     val playlistName: String,
+    val assetId: String? = null,
     val assetName: String,
     val startTime: String,       // ISO 8601
     val endTime: String,         // ISO 8601

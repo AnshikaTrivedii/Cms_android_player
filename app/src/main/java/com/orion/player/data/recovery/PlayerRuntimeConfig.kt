@@ -10,6 +10,20 @@ object PlayerRuntimeConfig {
     /** Watchdog health-check interval. */
     const val WATCHDOG_INTERVAL_MS = 30_000L
 
+    /**
+     * Delay before each auto-launch retry after boot. Android components, the display and
+     * the network are not all ready the instant BOOT_COMPLETED arrives, so the launch is
+     * retried on a widening schedule (~5 minutes total) instead of in a tight loop.
+     */
+    val BOOT_LAUNCH_BACKOFF_MS = longArrayOf(
+        5_000L,
+        10_000L,
+        20_000L,
+        40_000L,
+        60_000L,
+        120_000L
+    )
+
     /** No playback pulse for this long → treat as stuck. */
     const val PLAYBACK_STUCK_TIMEOUT_MS = 120_000L
 

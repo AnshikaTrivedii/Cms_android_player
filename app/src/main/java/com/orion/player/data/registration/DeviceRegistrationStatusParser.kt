@@ -24,7 +24,11 @@ object DeviceRegistrationStatusParser {
         return fromUnauthorized(body, error.message())
     }
 
-    fun fromUnauthorized(body: String?, fallbackMessage: String? = null): DeviceRegistrationStatus {
+    /**
+     * Explicit unregister/delete from a 401 body. A generic or token-expiry 401
+     * returns null so callers can retry without clearing pairing.
+     */
+    fun fromUnauthorized(body: String?, fallbackMessage: String? = null): DeviceRegistrationStatus? {
         val parsed = parseErrorBody(body)
         if (parsed != null) return parsed
 
@@ -38,7 +42,8 @@ object DeviceRegistrationStatusParser {
                 DeviceRegistrationStatus.DELETED
             // Legacy CMS hard-delete returned a generic unpaired message.
             lower.contains("invalid or unpaired") -> DeviceRegistrationStatus.DELETED
-            else -> DeviceRegistrationStatus.DELETED
+            lower.contains("expired") || lower.contains("token") -> null
+            else -> null
         }
     }
 

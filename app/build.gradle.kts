@@ -21,8 +21,8 @@ android {
         applicationId = "com.orion.player"
         minSdk = 24
         targetSdk = 35
-        versionCode = 51
-        versionName = "1.0.50"
+        versionCode = 57
+        versionName = "1.0.56"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

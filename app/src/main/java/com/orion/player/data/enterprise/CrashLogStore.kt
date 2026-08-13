@@ -18,30 +18,38 @@ import javax.inject.Singleton
 class CrashLogStore @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    private val crashFile = File(context.filesDir, "enterprise_logs/crash_latest.txt")
+    // Lazy and null-safe: the singleton can be built before the user unlocks the device,
+    // when credential-protected storage is not yet accessible.
+    private val crashFile: File? by lazy {
+        runCatching { File(context.filesDir, "enterprise_logs/crash_latest.txt") }.getOrNull()
+    }
     private val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
 
     fun recordCrash(throwable: Throwable) {
-        crashFile.parentFile?.mkdirs()
+        val file = crashFile ?: return
         val sw = StringWriter()
         throwable.printStackTrace(PrintWriter(sw))
-        crashFile.writeText(
-            buildString {
-                appendLine("timestamp=${formatter.format(Date())}")
-                appendLine("type=${throwable.javaClass.name}")
-                appendLine("message=${throwable.message}")
-                appendLine("--- stack trace ---")
-                append(sw.toString())
-            }
-        )
+        runCatching {
+            file.parentFile?.mkdirs()
+            file.writeText(
+                buildString {
+                    appendLine("timestamp=${formatter.format(Date())}")
+                    appendLine("type=${throwable.javaClass.name}")
+                    appendLine("message=${throwable.message}")
+                    appendLine("--- stack trace ---")
+                    append(sw.toString())
+                }
+            )
+        }
     }
 
     fun readPendingCrash(): String? {
-        if (!crashFile.exists() || crashFile.length() == 0L) return null
-        return runCatching { crashFile.readText() }.getOrNull()
+        val file = crashFile ?: return null
+        if (!file.exists() || file.length() == 0L) return null
+        return runCatching { file.readText() }.getOrNull()
     }
 
     fun clearPendingCrash() {
-        crashFile.delete()
+        crashFile?.delete()
     }
 }

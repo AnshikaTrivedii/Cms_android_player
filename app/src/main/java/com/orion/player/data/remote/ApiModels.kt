@@ -133,7 +133,9 @@ data class HeartbeatResponse(
     val defaultImageDuration: Int? = null,
     val defaultDocumentDuration: Int? = null,
     val defaultUrlDuration: Int? = null,
-    val defaultVideoDuration: Int? = null
+    val defaultVideoDuration: Int? = null,
+    val activeSchedule: ActiveScheduleInfo? = null,
+    val serverTime: String? = null
 )
 
 data class PlayerFeatures(
@@ -177,7 +179,9 @@ data class SyncRevisionResponse(
     val defaultDocumentDuration: Int? = null,
     val defaultUrlDuration: Int? = null,
     val defaultVideoDuration: Int? = null,
-    val configVersion: Int? = null
+    val activeSchedule: ActiveScheduleInfo? = null,
+    val configVersion: Int? = null,
+    val serverTime: String? = null
 )
 
 // ── Sync ───────────────────────────────────────────────────
@@ -213,7 +217,9 @@ data class SyncResponse(
     @SerializedName("defaultImageDuration") val defaultImageDuration: Int? = null,
     @SerializedName("defaultDocumentDuration") val defaultDocumentDuration: Int? = null,
     @SerializedName("defaultUrlDuration") val defaultUrlDuration: Int? = null,
-    @SerializedName("defaultVideoDuration") val defaultVideoDuration: Int? = null
+    @SerializedName("defaultVideoDuration") val defaultVideoDuration: Int? = null,
+    @SerializedName("activeSchedule") val activeSchedule: ActiveScheduleInfo? = null,
+    @SerializedName("serverTime") val serverTime: String? = null
 ) {
     val unchanged: Boolean get() = unchangedRaw ?: false
     fun resolvedAssets(): List<AssetInfo> = assets.orEmpty().filter { it.id.isNotBlank() }
@@ -236,6 +242,61 @@ data class PlaylistInfo(
 
     companion object {
         fun of(id: String, name: String) = PlaylistInfo(idRaw = id, nameRaw = name)
+    }
+}
+
+/**
+ * Schedule the CMS reports as currently active for this device. Null means no
+ * schedule is running and the manually assigned playlist applies.
+ *
+ * The CMS still chooses which schedule is active. [startDateTime] / [endDateTime]
+ * are the server-provided window for that choice: naive timestamps are Asia/Kolkata,
+ * ISO-8601 with Z/offset is UTC. The player uses them only as a safety net so an
+ * expired payload is never cached or played as active.
+ */
+data class ActiveScheduleInfo(
+    @SerializedName("scheduleId") private val scheduleIdRaw: String? = null,
+    @SerializedName("id") private val idRaw: String? = null,
+    @SerializedName("playlistId") private val playlistIdRaw: String? = null,
+    @SerializedName("playlistName") private val playlistNameRaw: String? = null,
+    @SerializedName("name") private val nameRaw: String? = null,
+    @SerializedName("startDateTime") val startDateTime: String? = null,
+    @SerializedName("endDateTime") val endDateTime: String? = null,
+    @SerializedName("startTime") val startTime: String? = null,
+    @SerializedName("endTime") val endTime: String? = null,
+    @SerializedName("start") val start: String? = null,
+    @SerializedName("end") val end: String? = null,
+    @SerializedName("status") val status: String? = null,
+    @SerializedName("timezone") val timezone: String? = null
+) {
+    val scheduleId: String get() = (scheduleIdRaw ?: idRaw).orEmpty()
+    val playlistId: String get() = playlistIdRaw.orEmpty()
+    val playlistName: String get() = (playlistNameRaw ?: nameRaw).orEmpty()
+
+    val resolvedStart: String?
+        get() = startDateTime?.takeIf { it.isNotBlank() }
+            ?: startTime?.takeIf { it.isNotBlank() }
+            ?: start?.takeIf { it.isNotBlank() }
+
+    val resolvedEnd: String?
+        get() = endDateTime?.takeIf { it.isNotBlank() }
+            ?: endTime?.takeIf { it.isNotBlank() }
+            ?: end?.takeIf { it.isNotBlank() }
+
+    val isTerminalStatus: Boolean
+        get() {
+            val value = status?.trim()?.uppercase() ?: return false
+            return value in TERMINAL_STATUSES
+        }
+
+    /** Ignore empty objects so `activeSchedule: {}` behaves like `null`. */
+    val isPresent: Boolean get() = scheduleId.isNotBlank() || playlistId.isNotBlank()
+
+    companion object {
+        private val TERMINAL_STATUSES = setOf(
+            "COMPLETED", "EXPIRED", "DISABLED", "INACTIVE", "ENDED",
+            "CANCELLED", "CANCELED", "STOPPED"
+        )
     }
 }
 
@@ -344,6 +405,9 @@ data class PopLogEntry(
     val assetName: String? = null,
     val content: String? = null,        // legacy alias for assetName
     val playlistName: String? = null,
+    val playlistId: String? = null,
+    val assetId: String? = null,
+    val deviceId: String? = null,
     val status: String,                 // "VERIFIED" or "FAILED"
     val startTime: String? = null,      // ISO 8601
     val endTime: String? = null,        // ISO 8601

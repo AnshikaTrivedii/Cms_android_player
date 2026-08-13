@@ -39,8 +39,22 @@ object CrashRecovery {
                 "${throwable.javaClass.simpleName}: ${throwable.message}"
             )
             if (app != null) {
-                PlayerLaunchHelper.launchPlayer(app, "crash.${throwable.javaClass.simpleName}")
-                OrionRecoveryLogger.logRecoveryCompleted("crash.${throwable.javaClass.simpleName}")
+                val source = "crash.${throwable.javaClass.simpleName}"
+                // The process is about to be killed, so the Activity is gone even though
+                // it never got an onStop. Without this the relaunch would be suppressed as
+                // a duplicate of an instance that no longer exists.
+                AutoStartCoordinator.onPlayerHidden()
+                // A crash that repeats immediately after every relaunch would otherwise
+                // spin forever. Back off instead, and let an alarm bring the player back:
+                // the cache and all persisted state survive untouched.
+                val decision = RecoveryThrottle.from(app).evaluate(RecoveryThrottle.KEY_CRASH)
+                if (decision.allowed) {
+                    PlayerLaunchHelper.launchPlayer(app, source)
+                    OrionRecoveryLogger.logRecoveryCompleted(source)
+                } else {
+                    AutoStartLogger.crashLoopBackoff(decision.attempt, decision.retryInMs)
+                    PlayerLaunchHelper.scheduleDelayedRelaunch(app, decision.retryInMs)
+                }
             }
         } catch (recoveryError: Exception) {
             OrionRecoveryLogger.logCrashDetected(recoveryError)

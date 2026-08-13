@@ -1,6 +1,7 @@
 package com.orion.player.util
 
 import android.util.Log
+import com.orion.player.data.schedule.ScheduleClock
 import okhttp3.Interceptor
 import okhttp3.Response
 import okio.Buffer
@@ -27,6 +28,7 @@ class ApiLoggingInterceptor : Interceptor {
 
         return try {
             val response = chain.proceed(request)
+            ScheduleClock.noteHttpDate(response.header("Date"))
             val elapsed = System.currentTimeMillis() - started
             val responseBody = response.peekBody(MAX_LOG_BYTES).string()
             Log.d(
