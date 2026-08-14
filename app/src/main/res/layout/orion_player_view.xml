@@ -3,6 +3,10 @@
   TextureView is required when PlayerView is hosted inside Compose AndroidView.
   Default SurfaceView renders on a separate layer and is commonly covered by
   Compose's opaque backgrounds → black video with audio / STATE_READY still firing.
+
+  resize_mode defaults to fit (letterbox, preserve aspect ratio). VideoPlayer.kt
+  switches this to FILL when CMS Stretch to Fit is on so the video is stretched
+  to the playback container (non-uniform scale; distortion is intentional).
 -->
 <androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"

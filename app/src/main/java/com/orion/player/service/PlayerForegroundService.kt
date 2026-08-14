@@ -317,11 +317,16 @@ class PlayerForegroundService : Service() {
         }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return if (Build.VERSION.SDK_INT >= 34) {
-            val options = ActivityOptions.makeBasic().apply {
-                pendingIntentBackgroundActivityStartMode =
-                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            val withOptions = runCatching {
+                val options = ActivityOptions.makeBasic().apply {
+                    pendingIntentBackgroundActivityStartMode =
+                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                }
+                PendingIntent.getActivity(this, 0, openIntent, flags, options.toBundle())
             }
-            PendingIntent.getActivity(this, 0, openIntent, flags, options.toBundle())
+            withOptions.getOrElse {
+                PendingIntent.getActivity(this, 0, openIntent, flags)
+            }
         } else {
             PendingIntent.getActivity(this, 0, openIntent, flags)
         }

@@ -21,8 +21,8 @@ android {
         applicationId = "com.orion.player"
         minSdk = 24
         targetSdk = 35
-        versionCode = 57
-        versionName = "1.0.56"
+        versionCode = 59
+        versionName = "1.0.58"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -54,6 +54,10 @@ android {
         debug {
             isMinifyEnabled = false
         }
+    }
+
+    testOptions {
+        animationsDisabled = true
     }
 
     compileOptions {
@@ -125,4 +129,10 @@ dependencies {
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
+
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
