@@ -65,6 +65,7 @@ class SecurePrefs @Inject constructor(
         private const val KEY_POP_LAST_GENERATED_AT = "pop_last_generated_at"
         private const val KEY_POP_LAST_UPLOADED_AT = "pop_last_uploaded_at"
         private const val KEY_POP_LAST_ERROR = "pop_last_error"
+        private const val KEY_POP_BATCH_QUEUE_RESET_DONE = "pop_batch_queue_reset_done"
         private const val KEY_STRETCH_TO_FIT = "stretch_to_fit"
         private const val KEY_DESIRED_ORIENTATION = "desired_orientation"
         private const val KEY_DISPLAY_CONFIG_VERSION = "display_config_version"
@@ -316,6 +317,10 @@ class SecurePrefs @Inject constructor(
     var popLastError: String?
         get() = prefs.getString(KEY_POP_LAST_ERROR, null)
         set(value) = prefs.edit().putString(KEY_POP_LAST_ERROR, value).apply()
+
+    var popBatchQueueResetDone: Boolean
+        get() = prefs.getBoolean(KEY_POP_BATCH_QUEUE_RESET_DONE, false)
+        set(value) = prefs.edit().putBoolean(KEY_POP_BATCH_QUEUE_RESET_DONE, value).apply()
 
     fun isAuthenticated(): Boolean =
         isPaired && !deviceToken.isNullOrBlank()

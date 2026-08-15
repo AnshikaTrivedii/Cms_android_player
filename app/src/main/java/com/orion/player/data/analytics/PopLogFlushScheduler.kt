@@ -37,7 +37,14 @@ class PopLogFlushScheduler @Inject constructor(
             intervalMs = intervalMs
         )
         flushJob = scope.launch {
-            flushNow()
+            if (!securePrefs.popBatchQueueResetDone) {
+                val cleared = telemetryRepository.clearPopQueue()
+                securePrefs.popBatchQueueResetDone = true
+                android.util.Log.i(
+                    "OrionPoP",
+                    "Cleared local PoP queue ($cleared) — next upload in ${intervalMs}ms"
+                )
+            }
             while (true) {
                 delay(intervalMs)
                 flushNow()

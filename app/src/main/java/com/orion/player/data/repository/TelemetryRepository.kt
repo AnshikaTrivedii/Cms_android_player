@@ -412,8 +412,15 @@ class TelemetryRepository @Inject constructor(
 
     suspend fun flushAll() {
         flushQueuedHeartbeats()
-        flushPopLogs()
         uploadPendingCrashLog()
+    }
+
+    suspend fun clearPopQueue(): Int {
+        val pending = popLogDao.getUnsyncedCount()
+        popLogDao.deleteAll()
+        PopTelemetryLogger.logSkipped("queue_cleared:$pending")
+        Log.i(TAG, "Cleared $pending queued PoP log(s)")
+        return pending
     }
 
     suspend fun uploadDeviceLogs(screenshotPath: String? = null): Boolean {

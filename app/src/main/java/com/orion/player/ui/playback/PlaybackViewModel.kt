@@ -152,10 +152,11 @@ class PlaybackViewModel @Inject constructor(
             recoverPlayback(reason)
         }
         contentSyncScheduler.registerFullSyncHandler { reason ->
-            requestContentSync(force = true, reason = reason)
+            requestContentSync(force = false, reason = reason)
         }
         revisionPollScheduler.registerSyncHandler { reason ->
-            executeForcedSync(reason, commandId = null)
+            requestContentSync(force = false, reason = reason)
+            true
         }
         contentSyncCoordinator.registerRetrySyncHandler {
             requestContentSync(force = true, reason = "sync.retry")

@@ -62,16 +62,18 @@ class InitialSyncCoordinator @Inject constructor(
     }
 
     fun handleHeartbeatResponse(response: HeartbeatResponse) {
-        handleSignals(ServerPlayerSignals.from(response))
+        handleSignals(ServerPlayerSignals.from(response), allowImmediateSync = true)
     }
 
     fun handleSyncResponse(response: SyncResponse) {
-        handleSignals(ServerPlayerSignals.from(response))
+        // Never start another sync from a sync response — syncRequired=true here
+        // is what created the GET /player/sync loop every ~1s.
+        handleSignals(ServerPlayerSignals.from(response), allowImmediateSync = false)
         response.commands?.takeIf { it.isNotEmpty() }?.let { remoteCommandExecutor.dispatch(it) }
     }
 
     fun handleDeviceReportResponse(response: DeviceReportResponse) {
-        handleSignals(ServerPlayerSignals.from(response))
+        handleSignals(ServerPlayerSignals.from(response), allowImmediateSync = false)
         response.commands?.takeIf { it.isNotEmpty() }?.let { remoteCommandExecutor.dispatch(it) }
     }
 
@@ -83,7 +85,7 @@ class InitialSyncCoordinator @Inject constructor(
         ensureRetryLoop()
     }
 
-    private fun handleSignals(signals: ServerPlayerSignals) {
+    private fun handleSignals(signals: ServerPlayerSignals, allowImmediateSync: Boolean) {
         popConfigManager.update(signals.popLogsExpected, signals.features)
         syncIntervalConfig.updateInterval(signals.syncIntervalSeconds)
         revisionPollIntervalConfig.updateInterval(signals.revisionPollIntervalSeconds)
@@ -102,19 +104,11 @@ class InitialSyncCoordinator @Inject constructor(
             )
         }
 
-        val shouldSyncImmediately =
-            signals.syncRequired == true ||
-                signals.initialSyncPending == true
+        val shouldSyncImmediately = allowImmediateSync && signals.initialSyncPending == true
 
         if (shouldSyncImmediately) {
             scope.launch {
-                runForcedSync(
-                    reason = when {
-                        signals.initialSyncPending == true -> "initial_sync.pending"
-                        else -> "heartbeat.sync_required"
-                    },
-                    commandId = null
-                )
+                runForcedSync(reason = "initial_sync.pending", commandId = null)
             }
         }
 

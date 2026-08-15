@@ -313,11 +313,8 @@ class ContentSyncCoordinator @Inject constructor(
             } else {
                 buildIncrementalSyncHints(cachedSnapshot)
             }
-            val (playlistVersion, layoutVersion) = if (force) {
-                null to null
-            } else {
-                versions.playlistVersion to versions.layoutVersion
-            }
+            val playlistVersion = versions.playlistVersion
+            val layoutVersion = versions.layoutVersion
             Log.i(
                 TAG,
                 "sync_start playlistVersion=${playlistVersion ?: "none"} layoutVersion=${layoutVersion ?: "none"} " +
