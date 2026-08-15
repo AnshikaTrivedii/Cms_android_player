@@ -45,17 +45,37 @@ object AutoStartLogger {
      * activity start is silently dropped unless the app is the default Home app, a device
      * owner, or otherwise exempt — see docs/AUTO_START_PROVISIONING.md.
      */
-    fun autoLaunchBlocked(attempts: Int) {
+    fun autoLaunchBlocked(
+        attempts: Int,
+        defaultHome: Boolean = false,
+        deviceOwner: Boolean = false
+    ) {
         Log.e(
             TAG,
-            "PLAYER_AUTO_LAUNCH_BLOCKED attempts=$attempts\n" +
+            "PLAYER_AUTO_LAUNCH_BLOCKED attempts=$attempts defaultHome=$defaultHome " +
+                "deviceOwner=$deviceOwner\n" +
                 "The player did not reach the foreground after boot. Android blocked the " +
                 "background Activity start (BAL). Display over other apps / SYSTEM_ALERT_WINDOW " +
                 "does not override this on Android 14+. Set Orion Player as the default Home " +
-                "app (press Home → Orion Player → Always) or provision it as device owner " +
-                "(docs/AUTO_START_PROVISIONING.md). The foreground service, sync and cache " +
-                "keep running regardless."
+                "app (pairing screen → Set as Home app, or press Home → Orion Player → Always) " +
+                "or provision it as device owner (docs/AUTO_START_PROVISIONING.md). The " +
+                "foreground service, sync and cache keep running regardless."
         )
+    }
+
+    fun homeRoleRequested() {
+        Log.i(TAG, "HOME_ROLE_REQUESTED opening system Home / launcher picker")
+    }
+
+    fun homeRoleRequestFailed(error: Throwable) {
+        Log.w(
+            TAG,
+            "HOME_ROLE_REQUEST_FAILED error=${error.javaClass.simpleName}: ${error.message}"
+        )
+    }
+
+    fun homeRoleDeferredToSystem() {
+        Log.i(TAG, "HOME_ROLE_DEFERRED Orion is already the default Home app — OS will start it")
     }
 
     fun playerAlreadyRunning(source: String) {

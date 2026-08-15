@@ -20,4 +20,8 @@
     <string name="watchdog_notification_text">Monitoring playback and device health</string>
     <string name="device_admin_label">Orion Signage Device Owner</string>
     <string name="device_admin_description">Required only on dedicated signage devices, to keep Orion Player locked to the screen and launching automatically after every boot.</string>
+    <string name="home_role_button">Set as Home app</string>
+    <string name="home_role_hint">Required so this screen opens after every power-on</string>
+    <string name="home_role_active">Orion Player is the Home app — it will open after every power-on</string>
+    <string name="home_role_chooser_title">Use Orion Player as Home</string>
 </resources>

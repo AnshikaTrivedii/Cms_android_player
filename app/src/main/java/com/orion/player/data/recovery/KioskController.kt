@@ -3,11 +3,14 @@ package com.orion.player.data.recovery
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.admin.DevicePolicyManager
+import android.app.role.RoleManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.provider.Settings
+import com.orion.player.R
 import com.orion.player.receiver.OrionDeviceAdminReceiver
 
 /**
@@ -106,12 +109,66 @@ object KioskController {
     }
 
     /**
+     * Device-owner policy bundle: lock-task allow-list plus persistent Home.
+     * No-op on a normal APK install.
+     */
+    fun applyDedicatedDevicePolicies(context: Context): Boolean {
+        if (!isDeviceOwner(context)) return false
+        val lockTask = ensureLockTaskAllowed(context)
+        val home = applyHomeAppRole(context, enabled = true)
+        return lockTask && home
+    }
+
+    /**
+     * Ask the user (or the platform) to make Orion the default Home / launcher app.
+     * Device-owner devices skip the picker and pin Home themselves.
+     */
+    fun requestHomeRole(activity: Activity): Boolean {
+        if (AutoStartCoordinator.isDefaultHomeApp(activity)) {
+            AutoStartLogger.homeAppStatus(isDefaultHome = true)
+            return true
+        }
+        if (isDeviceOwner(activity)) {
+            return applyHomeAppRole(activity, enabled = true)
+        }
+        val intent = homeRoleRequestIntent(activity) ?: return false
+        return try {
+            activity.startActivity(intent)
+            AutoStartLogger.homeRoleRequested()
+            true
+        } catch (error: Exception) {
+            AutoStartLogger.homeRoleRequestFailed(error)
+            false
+        }
+    }
+
+    fun homeRoleRequestIntent(context: Context): Intent? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val roleManager = context.getSystemService(RoleManager::class.java)
+            if (roleManager != null &&
+                roleManager.isRoleAvailable(RoleManager.ROLE_HOME) &&
+                !roleManager.isRoleHeld(RoleManager.ROLE_HOME)
+            ) {
+                return roleManager.createRequestRoleIntent(RoleManager.ROLE_HOME)
+            }
+        }
+        val homeSettings = Intent(Settings.ACTION_HOME_SETTINGS)
+        if (homeSettings.resolveActivity(context.packageManager) != null) {
+            return homeSettings
+        }
+        val home = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addCategory(Intent.CATEGORY_DEFAULT)
+        }
+        return Intent.createChooser(home, context.getString(R.string.home_role_chooser_title))
+    }
+
+    /**
      * On a device-owner deployment, make Orion the persistent Home app so Android itself
      * starts it at boot and returns to it on every Home press. This is the only reliable
      * auto-launch path on devices that block background activity starts.
      *
-     * Never called automatically: it is gated behind an explicit device setting so a normal
-     * installation never takes over the user's launcher.
+     * Called automatically when the app is device owner.
      */
     fun applyHomeAppRole(context: Context, enabled: Boolean): Boolean {
         if (!isDeviceOwner(context)) {

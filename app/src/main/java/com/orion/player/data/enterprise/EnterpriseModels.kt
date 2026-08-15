@@ -33,7 +33,9 @@ data class DevicePermissionSnapshot(
     val postNotifications: Boolean,
     val batteryOptimizationIgnored: Boolean,
     val autoStartLikely: Boolean,
-    val kioskModeEnabled: Boolean
+    val kioskModeEnabled: Boolean,
+    val defaultHome: Boolean,
+    val deviceOwner: Boolean
 )
 
 /** Remote command issued by CMS via heartbeat or sync response. */

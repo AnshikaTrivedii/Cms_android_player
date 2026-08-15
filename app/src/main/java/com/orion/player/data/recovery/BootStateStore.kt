@@ -91,6 +91,21 @@ class BootStateStore private constructor(private val prefs: SharedPreferences) {
             .apply()
     }
 
+    /**
+     * True when the Home-role picker has not been shown yet on this boot.
+     * A stored uptime larger than the current uptime means the previous prompt
+     * belonged to an earlier boot (uptime reset).
+     */
+    fun shouldPromptHomeRole(uptimeMs: Long = SystemClock.elapsedRealtime()): Boolean {
+        val promptedUptime = prefs.getLong(KEY_HOME_ROLE_PROMPTED_UPTIME, -1L)
+        if (promptedUptime < 0L) return true
+        return promptedUptime > uptimeMs
+    }
+
+    fun markHomeRolePrompted(uptimeMs: Long = SystemClock.elapsedRealtime()) {
+        prefs.edit().putLong(KEY_HOME_ROLE_PROMPTED_UPTIME, uptimeMs).apply()
+    }
+
     // ── Process liveness (process-death detection) ─────────────────
 
     /**
@@ -154,6 +169,7 @@ class BootStateStore private constructor(private val prefs: SharedPreferences) {
         private const val KEY_LAST_LOCKED_BOOT_AT = "last_locked_boot_at"
         private const val KEY_BOOT_LAUNCH_PENDING = "boot_launch_pending"
         private const val KEY_BOOT_LAUNCH_ATTEMPTS = "boot_launch_attempts"
+        private const val KEY_HOME_ROLE_PROMPTED_UPTIME = "home_role_prompted_uptime"
         private const val KEY_PLAYER_RUNNING = "player_running"
         private const val KEY_PLAYER_RUNNING_AT = "player_running_at"
         private const val KEY_ATTEMPTS_PREFIX = "attempts_"

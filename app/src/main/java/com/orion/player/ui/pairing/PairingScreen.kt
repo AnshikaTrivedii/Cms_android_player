@@ -1,5 +1,6 @@
 package com.orion.player.ui.pairing
 
+import android.app.Activity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
@@ -30,22 +32,34 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.orion.player.BuildConfig
+import com.orion.player.R
+import com.orion.player.data.recovery.AutoStartCoordinator
+import com.orion.player.data.recovery.KioskController
 
 /**
  * Pairing screen displayed on first launch.
@@ -198,6 +212,59 @@ private fun PairingCodeDisplay(code: String) {
                 fontSize = 14.sp
             )
         }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        SetAsHomeAction()
+    }
+}
+
+@Composable
+private fun SetAsHomeAction() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isDefaultHome by remember {
+        mutableStateOf(AutoStartCoordinator.isDefaultHomeApp(context))
+    }
+
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            isDefaultHome = AutoStartCoordinator.isDefaultHomeApp(context)
+        }
+    }
+
+    if (isDefaultHome) {
+        Text(
+            text = stringResource(R.string.home_role_active),
+            color = Color(0xFF6C63FF),
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center
+        )
+        return
+    }
+
+    Text(
+        text = stringResource(R.string.home_role_hint),
+        color = Color(0xFFB0B0C0),
+        fontSize = 13.sp,
+        textAlign = TextAlign.Center
+    )
+    Spacer(modifier = Modifier.height(12.dp))
+    OutlinedButton(
+        onClick = {
+            val activity = context as? Activity ?: return@OutlinedButton
+            KioskController.requestHomeRole(activity)
+        },
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Default.Home,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(stringResource(R.string.home_role_button))
     }
 }
 

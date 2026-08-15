@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
         if (launchSource.startsWith("boot.")) {
             AutoStartLogger.bootRecovery(launchSource)
         }
-        applyHomeAppRoleIfConfigured()
+        applyDedicatedHomeIfNeeded()
 
         if (securePrefs.isPaired && securePrefs.deviceToken.isNullOrBlank()) {
             securePrefs.clearCredentials()
@@ -96,6 +96,7 @@ class MainActivity : ComponentActivity() {
         // activity start that the platform blocks fails silently.
         AutoStartCoordinator.onPlayerVisible(this, launchSource)
         AutoStartLogger.homeAppStatus(AutoStartCoordinator.isDefaultHomeApp(this))
+        requestHomeRoleOncePerBoot()
     }
 
     override fun onStop() {
@@ -179,10 +180,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Home-app takeover is opt-in and only possible on a device-owner provisioned device. */
-    private fun applyHomeAppRoleIfConfigured() {
-        if (!securePrefs.homeAppModeEnabled) return
-        KioskController.applyHomeAppRole(this, enabled = true)
+    /** Device owner always pins Home. The stored flag covers a later opt-in. */
+    private fun applyDedicatedHomeIfNeeded() {
+        if (KioskController.isDeviceOwner(this)) {
+            securePrefs.homeAppModeEnabled = true
+            KioskController.applyDedicatedDevicePolicies(this)
+            return
+        }
+        if (securePrefs.homeAppModeEnabled) {
+            KioskController.applyHomeAppRole(this, enabled = true)
+        }
+    }
+
+    /**
+     * Ask once per boot to become the default Home app. Device-owner devices skip
+     * the picker because persistent Home is applied in [applyDedicatedHomeIfNeeded].
+     */
+    private fun requestHomeRoleOncePerBoot() {
+        if (AutoStartCoordinator.isDefaultHomeApp(this) || KioskController.isDeviceOwner(this)) {
+            return
+        }
+        val store = BootStateStore.from(this)
+        if (!store.shouldPromptHomeRole()) return
+        store.markHomeRolePrompted()
+        KioskController.requestHomeRole(this)
     }
 
     private fun bringPlayerToForeground(source: String) {

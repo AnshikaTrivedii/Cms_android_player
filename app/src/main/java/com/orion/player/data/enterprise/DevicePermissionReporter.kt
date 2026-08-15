@@ -7,6 +7,8 @@ import android.os.Build
 import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import com.orion.player.data.local.SecurePrefs
+import com.orion.player.data.recovery.AutoStartCoordinator
+import com.orion.player.data.recovery.KioskController
 import com.orion.player.data.remote.DevicePermissionsPayload
 import com.orion.player.receiver.BootReceiver
 import com.orion.player.service.PlayerForegroundService
@@ -45,6 +47,8 @@ class DevicePermissionReporter @Inject constructor(
             true
         }
         val batteryOptIgnored = isBatteryOptimizationIgnored()
+        val defaultHome = AutoStartCoordinator.isDefaultHomeApp(context)
+        val deviceOwner = KioskController.isDeviceOwner(context)
         return DevicePermissionSnapshot(
             internet = hasInternet,
             networkState = hasNetwork,
@@ -53,8 +57,10 @@ class DevicePermissionReporter @Inject constructor(
             wakeLock = hasWakeLock,
             postNotifications = hasNotifications,
             batteryOptimizationIgnored = batteryOptIgnored,
-            autoStartLikely = hasBoot && batteryOptIgnored,
-            kioskModeEnabled = securePrefs.kioskModeEnabled
+            autoStartLikely = hasBoot && (defaultHome || deviceOwner),
+            kioskModeEnabled = securePrefs.kioskModeEnabled,
+            defaultHome = defaultHome,
+            deviceOwner = deviceOwner
         )
     }
 
@@ -69,7 +75,9 @@ class DevicePermissionReporter @Inject constructor(
             notification = snapshot.postNotifications,
             batteryOptimizationDisabled = snapshot.batteryOptimizationIgnored,
             autoStart = snapshot.autoStartLikely,
-            kioskMode = snapshot.kioskModeEnabled
+            kioskMode = snapshot.kioskModeEnabled,
+            defaultHome = snapshot.defaultHome,
+            deviceOwner = snapshot.deviceOwner
         )
     }
 

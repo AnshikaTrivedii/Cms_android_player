@@ -145,8 +145,8 @@ class SecurePrefs @Inject constructor(
         set(value) = prefs.edit().putBoolean(KEY_KIOSK_MODE, value).apply()
 
     /**
-     * Opt-in: on a device-owner provisioned device, make Orion the persistent Home app.
-     * Off by default so a normal install never replaces the user's launcher.
+     * When true, persist Orion as Home on a device-owner device. Device-owner
+     * deployments always apply persistent Home regardless of this flag.
      */
     var homeAppModeEnabled: Boolean
         get() = prefs.getBoolean(KEY_HOME_APP_MODE, false)

@@ -49,7 +49,9 @@ data class DevicePermissionsPayload(
     val notification: Boolean? = null,
     val batteryOptimizationDisabled: Boolean? = null,
     val autoStart: Boolean? = null,
-    val kioskMode: Boolean? = null
+    val kioskMode: Boolean? = null,
+    val defaultHome: Boolean? = null,
+    val deviceOwner: Boolean? = null
 )
 
 data class HeartbeatRequest(

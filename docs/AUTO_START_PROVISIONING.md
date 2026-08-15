@@ -1,22 +1,25 @@
 # Orion Player — Auto-Start, Kiosk and Home-App Provisioning
 
-How the player starts itself after a reboot, what works from a plain APK install, and what
-requires device provisioning.
+How the player starts after power-on. **Home (or device owner) is the required path.**
+The boot receiver is recovery only — it cannot reliably open the UI on Android 10+.
 
 ---
 
-## 1. What a plain APK install gives you
+## 1. Required: Orion must be the Home app
 
-Installing the APK normally is enough for the whole boot chain below. No provisioning, no
-root, no device owner.
+Android always starts the default Home / launcher activity when the device boots or the
+screen comes on. That is a background-activity-launch (BAL) exemption. Starting
+`MainActivity` from `BOOT_COMPLETED` is **not**.
 
 ```
-DEVICE POWER ON → ANDROID BOOTS → BootReceiver (BOOT_COMPLETED)
-   → PlayerForegroundService starts (notification + wake lock + watchdog)
-   → MainActivity launched
+SCREEN / DEVICE ON → Android starts the default Home app
+   → MainActivity (Orion)
+   → lock-task if device owner
    → cached playlist plays immediately
    → CMS sync runs in the background
-   → latest playlist takes over when its assets are ready
+
+BootReceiver + PlayerForegroundService still start in parallel. They keep the process
+alive and relaunch the Activity only if it never became visible (crash, OEM splash, kill).
 ```
 
 What is guaranteed by the app on any device:
@@ -29,32 +32,25 @@ What is guaranteed by the app on any device:
 | Auto-launch retried with backoff for ~5 minutes | Yes |
 | Crash-loop and watchdog-loop protection | Yes |
 | Screen kept on, shown over the lock screen | Yes |
+| Screen-on / user-present bring-to-front | Yes (still needs Home on Android 10+) |
+| Guaranteed foreground launch after power-on | **No — set Home (section 4) or device owner (section 3)** |
 | Lock Task (kiosk) mode | **No — needs section 3** |
-| Guaranteed foreground launch on a locked-down OEM | **No — needs section 3 or 4** |
 
-### The one thing that is not guaranteed
+### Why a plain APK is not enough
 
 Since Android 10, an app in the background may not start an Activity unless it is exempt.
 `BOOT_COMPLETED` is **not** an exemption. **Display over other apps (`SYSTEM_ALERT_WINDOW`)
-is also not an exemption on Android 14+.** Granting that toggle only allows overlay windows;
-it does not let Orion call `startActivity()` after boot.
+is also not an exemption on Android 14+.** A foreground service is **not** a BAL exemption
+either (measured on Android 15/16).
 
-Most Android TV boxes still need one of:
+The pairing screen has a **Set as Home app** button. The player also asks once per boot
+if it is not already Home. Device-owner devices skip the picker and pin Home themselves.
 
-- Orion set as the **Home / launcher** app, or
-- Orion set as **device owner** (section 3)
+Heartbeat reports `defaultHome` and `deviceOwner`. `autoStart` is true only when the boot
+receiver is registered **and** Orion is Home or device owner.
 
-A foreground service is **not** a BAL exemption either (measured on Android 15/16).
-
-Orion handles this honestly:
-
-- it retries the launch at 5s, 10s, 20s, 40s, 60s and 120s after boot;
-- `PLAYER_AUTO_LAUNCH_SUCCESS` is logged only when the Activity is genuinely on screen;
-- if every retry fails it logs `PLAYER_AUTO_LAUNCH_BLOCKED`, which means *this device
-  requires section 3 or section 4*.
-
-The foreground service, sync, downloads and cache keep running either way, so the device
-stays managed and up to date even while the screen is not showing the player.
+If every retry fails the player logs `PLAYER_AUTO_LAUNCH_BLOCKED` with `defaultHome=false`.
+The foreground service, sync, downloads and cache keep running either way.
 
 ---
 
@@ -128,9 +124,11 @@ Common failures:
 | `...because there are already some accounts on the device` | Factory reset, skip account setup |
 | `Unknown admin` | The APK is not installed, or the package name is wrong |
 
-Once provisioned, on the next launch:
+Once provisioned, `OrionDeviceAdminReceiver.onEnabled` immediately allow-lists lock-task
+and pins Orion as the persistent Home app. On the next launch:
 
 ```
+OrionAutoStart: HOME_APP_STATUS defaultHome=true
 OrionAutoStart: KIOSK_MODE_ENTERED lockTaskPermitted=true deviceOwner=true
 ```
 
@@ -153,20 +151,40 @@ adb shell dpm remove-active-admin com.orion.player/.receiver.OrionDeviceAdminRec
 
 ---
 
-## 4. Home / launcher app
+## 4. First-time screen setup
 
-`MainActivity` already declares `CATEGORY_HOME` and `CATEGORY_DEFAULT`, so Orion can be
-chosen as the launcher. It never takes the role on its own.
+### Path A — standard APK install (minimum)
 
-**Option A — user or installer chooses it.** Press Home, pick Orion Player, choose Always.
-Android then starts Orion at boot itself, which sidesteps background-activity-start
-restrictions entirely. This is the recommended fix for any device that logged
-`PLAYER_AUTO_LAUNCH_BLOCKED`.
+1. Power on the panel. Skip or finish the Android wizard. Avoid a lock-screen PIN.
+2. Install the Orion Player APK and open it.
+3. Pair in Orion CMS with the on-screen code.
+4. Tap **Set as Home app** (or accept the once-per-boot Home picker). On Android TV this
+   may open Settings → Home screen — pick Orion Player and Always.
+5. Optionally ignore battery optimization for Orion on OEM boxes that kill background apps.
+6. Reboot once: Orion must open, not the stock TV launcher.
 
-**Option B — enforced by device owner.** Requires section 3, plus the opt-in flag
-`home_app_mode_enabled` in secure preferences (default `false`). When enabled, the player
-calls `addPersistentPreferredActivity` so the Home role cannot be changed by hand. Disable
-by setting the flag back to `false`, which calls
+No adb, no factory reset. If step 4 is skipped, power-on start stays unreliable on
+modern Android.
+
+### Path B — dedicated signage device (production fleets)
+
+1. Factory-reset the device. Add **no** Google or other accounts.
+2. Install the Orion Player APK.
+3. `adb shell dpm set-device-owner com.orion.player/.receiver.OrionDeviceAdminReceiver`
+4. Open Orion or reboot. Persistent Home and lock-task apply automatically.
+5. Pair in CMS as usual. Disable lock screen if the wizard left one on.
+6. Reboot once: Orion comes up locked in front.
+
+### Home / launcher details
+
+`MainActivity` declares `CATEGORY_HOME` and `CATEGORY_DEFAULT`.
+
+**Option A — installer chooses it** (Path A above). Android then starts Orion at boot
+itself. This is the required fix for any device that logged `PLAYER_AUTO_LAUNCH_BLOCKED`.
+
+**Option B — enforced by device owner** (Path B). Persistent Home is applied automatically
+in `onEnabled` and again on every `MainActivity` start. No `home_app_mode_enabled` flag
+is required. The flag is still set to `true` so a later opt-out can call
 `clearPackagePersistentPreferredActivities`.
 
 Verify with:
@@ -211,6 +229,7 @@ path is invisible.
 | Process killed | `START_STICKY` service returns; `PLAYER_PROCESS_RECOVERY` logged; cache-first restart |
 | Uncaught crash | Immediate relaunch the first time; repeated crashes back off and relaunch via an alarm, logging `CRASH_LOOP_BACKOFF` |
 | Boot broadcast repeated | De-duplicated on both wall clock and uptime; `BOOT_DUPLICATE_IGNORED` |
+| Display wakes without reboot | `SCREEN_ON` / `USER_PRESENT` bring the player forward if it is not already visible |
 | APK updated | `MY_PACKAGE_REPLACED` relaunches the player |
 
 A backoff counter resets after 15 minutes without the failure recurring, so an isolated
@@ -257,9 +276,10 @@ OrionAutoStart: PLAYER_AUTO_LAUNCH_SUCCESS source=boot...
 `topResumedActivity=com.orion.player/.MainActivity`, on the first attempt, ~2s after
 `BOOT_COMPLETED`. Repeated with airplane mode enabled: identical result, zero crashes.
 
-**Conclusion for deployment:** on Android 13+ TV devices, configure Orion as the Home app
-(section 4) or as a device owner (section 3). Treat a plain install as "will probably work,
-verify per device model" and check the logs for `PLAYER_AUTO_LAUNCH_BLOCKED`.
+**Conclusion for deployment:** on Android 13+ TV devices, Orion **must** be the Home app
+(section 4, Path A) or device owner (section 3, Path B). A plain install without Home is
+expected to stay on the stock launcher. Check logs for `PLAYER_AUTO_LAUNCH_BLOCKED` and
+heartbeat `defaultHome` / `deviceOwner`.
 
 ---
 

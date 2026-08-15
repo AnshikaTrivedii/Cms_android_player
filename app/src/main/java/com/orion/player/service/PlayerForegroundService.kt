@@ -8,6 +8,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import androidx.core.content.ContextCompat
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -20,7 +22,9 @@ import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.recovery.AutoStartCoordinator
 import com.orion.player.data.recovery.AutoStartLogger
 import com.orion.player.data.recovery.BootStateStore
+import com.orion.player.data.recovery.KioskController
 import com.orion.player.data.recovery.OrionRecoveryLogger
+import com.orion.player.receiver.ScreenOnReceiver
 import com.orion.player.data.recovery.PlaybackRecoveryCoordinator
 import com.orion.player.data.recovery.PlayerHealthMonitor
 import com.orion.player.data.recovery.PlayerLaunchHelper
@@ -64,6 +68,8 @@ class PlayerForegroundService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var watchdogStarted = false
     private var healthCheckCount = 0
+    private val screenOnReceiver = ScreenOnReceiver()
+    private var screenOnReceiverRegistered = false
 
     private val healthCheckRunnable = object : Runnable {
         override fun run() {
@@ -92,7 +98,11 @@ class PlayerForegroundService : Service() {
             if (attempt > PlayerRuntimeConfig.BOOT_LAUNCH_BACKOFF_MS.size) {
                 bootState.clearBootLaunchPending()
                 AutoStartCoordinator.logLaunchPrivileges(applicationContext)
-                AutoStartLogger.autoLaunchBlocked(attempt - 1)
+                AutoStartLogger.autoLaunchBlocked(
+                    attempts = attempt - 1,
+                    defaultHome = AutoStartCoordinator.isDefaultHomeApp(applicationContext),
+                    deviceOwner = KioskController.isDeviceOwner(applicationContext)
+                )
                 startForeground(NOTIFICATION_ID, buildNotification())
                 return
             }
@@ -114,6 +124,7 @@ class PlayerForegroundService : Service() {
         OrionRecoveryLogger.logForegroundServiceStarted()
         startForeground(NOTIFICATION_ID, buildNotification())
         acquireWakeLock()
+        registerScreenOnReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -155,6 +166,7 @@ class PlayerForegroundService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(healthCheckRunnable)
         handler.removeCallbacks(bootLaunchRunnable)
+        unregisterScreenOnReceiver()
         releaseWakeLock()
         val shouldRestart = securePrefs.isAuthenticated()
         super.onDestroy()
@@ -257,6 +269,27 @@ class PlayerForegroundService : Service() {
             heartbeatScheduler.start()
             popLogFlushScheduler.start()
         }
+    }
+
+    private fun registerScreenOnReceiver() {
+        if (screenOnReceiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        ContextCompat.registerReceiver(
+            this,
+            screenOnReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        screenOnReceiverRegistered = true
+    }
+
+    private fun unregisterScreenOnReceiver() {
+        if (!screenOnReceiverRegistered) return
+        runCatching { unregisterReceiver(screenOnReceiver) }
+        screenOnReceiverRegistered = false
     }
 
     private fun acquireWakeLock() {

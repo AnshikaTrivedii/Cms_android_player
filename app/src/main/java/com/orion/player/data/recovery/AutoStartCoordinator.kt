@@ -54,6 +54,16 @@ object AutoStartCoordinator {
             return true
         }
 
+        // First boot attempt: Android starts the default Home app itself. Skip the
+        // extra startActivity so we do not race the system launcher. Retries still
+        // dispatch if MainActivity never becomes visible.
+        if (attempt == 1 && source.startsWith("boot.") && isDefaultHomeApp(context)) {
+            AutoStartLogger.autoLaunchStart(source, attempt)
+            AutoStartLogger.homeRoleDeferredToSystem()
+            pendingLaunchSource = source
+            return true
+        }
+
         val now = System.currentTimeMillis()
         if (now - lastDispatchAtMs < MIN_DISPATCH_GAP_MS) {
             // Another caller just dispatched a launch that has not landed yet.

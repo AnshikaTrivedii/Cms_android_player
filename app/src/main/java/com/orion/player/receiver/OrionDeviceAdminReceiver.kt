@@ -4,6 +4,7 @@ import android.app.admin.DeviceAdminReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.util.Log
+import com.orion.player.data.recovery.KioskController
 
 /**
  * Device admin component required to provision Orion as a **device owner** on dedicated
@@ -23,6 +24,7 @@ class OrionDeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: android.content.Intent) {
         super.onEnabled(context, intent)
         Log.i(TAG, "Device admin enabled — dedicated device features available")
+        KioskController.applyDedicatedDevicePolicies(context)
     }
 
     override fun onDisabled(context: Context, intent: android.content.Intent) {
