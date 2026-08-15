@@ -13,6 +13,9 @@ interface HeartbeatQueueDao {
     @Query("SELECT * FROM queued_heartbeats WHERE isSynced = 0 ORDER BY id ASC LIMIT :limit")
     suspend fun getUnsynced(limit: Int = 20): List<QueuedHeartbeatEntity>
 
+    @Query("SELECT * FROM queued_heartbeats WHERE isSynced = 0 ORDER BY id DESC LIMIT 1")
+    suspend fun getLatestUnsynced(): QueuedHeartbeatEntity?
+
     @Query("UPDATE queued_heartbeats SET isSynced = 1 WHERE id IN (:ids)")
     suspend fun markSynced(ids: List<Long>)
 

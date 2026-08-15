@@ -75,9 +75,7 @@ class DevicePermissionReporter @Inject constructor(
             notification = snapshot.postNotifications,
             batteryOptimizationDisabled = snapshot.batteryOptimizationIgnored,
             autoStart = snapshot.autoStartLikely,
-            kioskMode = snapshot.kioskModeEnabled,
-            defaultHome = snapshot.defaultHome,
-            deviceOwner = snapshot.deviceOwner
+            kioskMode = snapshot.kioskModeEnabled
         )
     }
 

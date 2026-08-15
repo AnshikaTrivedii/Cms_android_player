@@ -291,7 +291,6 @@ class PlaybackViewModel @Inject constructor(
                     AutoStartLogger.cmsSyncSuccess("updated")
                     applySnapshotIfPlayable(outcome.snapshot, outcome.structureChanged)
                     telemetryRepository.flushAll()
-                    reportSuccessfulSyncToCms()
                 }
                 is SyncOutcome.Unchanged -> {
                     AutoStartLogger.cmsSyncSuccess("unchanged")
@@ -305,7 +304,6 @@ class PlaybackViewModel @Inject constructor(
                             _uiState.value = PlaybackUiState.WaitingForInitialDownload(reason)
                         }
                     }
-                    reportSuccessfulSyncToCms()
                 }
                 is SyncOutcome.Downloading -> Unit
             }
@@ -528,7 +526,6 @@ class PlaybackViewModel @Inject constructor(
                         displayingContent = isDisplayingContent(),
                         staged = pendingSnapshot != null
                     )
-                    reportSuccessfulSyncToCms()
                 }
                 is SyncOutcome.Failed -> {
                     PlaybackEngineLogger.logSyncCompleted(
@@ -548,15 +545,10 @@ class PlaybackViewModel @Inject constructor(
                         displayingContent = isDisplayingContent(),
                         staged = pendingSnapshot != null
                     )
-                    reportSuccessfulSyncToCms()
                 }
                 is SyncOutcome.Downloading -> Unit
             }
         }
-    }
-
-    private suspend fun reportSuccessfulSyncToCms() {
-        runCatching { heartbeatScheduler.sendHeartbeatNow() }
     }
 
     private fun isDisplayingContent(): Boolean =
@@ -1257,8 +1249,6 @@ fun onUrlLoadFailed(assetName: String) {
         val expired = activeScheduleTracker.consumeLocalExpiry(source = "heartbeat")
         if (expired || scheduleSignal.reason == ActiveScheduleTracker.REASON_ENDED) {
             leaveExpiredSchedule(scheduleSignal.reason ?: "schedule.ended")
-        } else if (response.syncRequired == true) {
-            requestContentSync(force = true, reason = "heartbeat.sync_required")
         } else if (contentSyncCoordinator.consumeRevisionIfChanged(response.contentRevision)) {
             requestContentSync(force = true, reason = "heartbeat.revision")
         } else if (scheduleSignal.shouldSync) {
@@ -1266,13 +1256,6 @@ fun onUrlLoadFailed(assetName: String) {
                 force = true,
                 reason = scheduleSignal.reason ?: "schedule.changed"
             )
-        }
-        viewModelScope.launch {
-            try {
-                telemetryRepository.flushQueuedHeartbeats()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
         }
     }
 
@@ -1304,17 +1287,14 @@ fun onUrlLoadFailed(assetName: String) {
             is SyncOutcome.Updated -> {
                 applySnapshotIfPlayable(outcome.snapshot, outcome.structureChanged)
                 telemetryRepository.flushAll()
-                reportSuccessfulSyncToCms()
                 snapshotIsPlayable(outcome.snapshot) || isDisplayingContent()
             }
             is SyncOutcome.Unchanged -> {
                 val fallback = contentSyncCoordinator.loadCachedSnapshot()
                 if (!isDisplayingContent() && fallback != null && snapshotIsPlayable(fallback)) {
                     applySnapshot(fallback, structureChanged = true)
-                    reportSuccessfulSyncToCms()
                     true
                 } else {
-                    reportSuccessfulSyncToCms()
                     isDisplayingContent()
                 }
             }

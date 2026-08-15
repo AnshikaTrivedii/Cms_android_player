@@ -58,7 +58,7 @@ class CacheReportRepository @Inject constructor(
             completedCommandId = completedCommandId,
             commandFailed = if (commandFailed) true else null,
             commandError = commandError,
-            assets = cachedAssets.map { entity ->
+            assets = cachedAssets.distinctBy { it.assetId }.map { entity ->
                 val asset = AssetInfo.fromCache(
                     id = entity.assetId,
                     name = entity.assetName,

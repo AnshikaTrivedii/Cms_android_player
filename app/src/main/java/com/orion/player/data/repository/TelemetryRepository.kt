@@ -136,8 +136,8 @@ class TelemetryRepository @Inject constructor(
                     responseBody = gson.toJson(mapped),
                     elapsedMs = elapsed
                 )
-                runCatching { flushQueuedHeartbeats() }
-                    .onFailure { Log.w(TAG, "Heartbeat flush queue failed: ${it.message}") }
+                runCatching { heartbeatQueueDao.deleteAll() }
+                    .onFailure { Log.w(TAG, "Heartbeat queue clear failed: ${it.message}") }
                 runCatching { uploadPendingCrashLog() }
                     .onFailure { Log.w(TAG, "Crash log upload failed: ${it.message}") }
                 return mapped
@@ -213,39 +213,27 @@ class TelemetryRepository @Inject constructor(
 
     suspend fun flushQueuedHeartbeats(): Int {
         if (!sessionGuard.isPairedWithToken()) return 0
+        val latest = heartbeatQueueDao.getLatestUnsynced() ?: return 0
+        heartbeatQueueDao.deleteAll()
         val token = sessionGuard.requirePairedToken()
-        var flushed = 0
-
-        while (true) {
-            val batch = heartbeatQueueDao.getUnsynced(limit = 10)
-            if (batch.isEmpty()) break
-
-            try {
-                for (heartbeat in batch) {
-                    val body = heartbeat.payloadJson
-                        ?.let(HeartbeatPayloadCodec::decode)
-                        ?.let(HeartbeatPayloadNormalizer::normalize)
-                        ?: HeartbeatPayloadNormalizer.normalize(
-                            HeartbeatRequest(
-                                cpu = heartbeat.cpu,
-                                ram = heartbeat.ram,
-                                temp = heartbeat.temp,
-                                currentContent = heartbeat.currentContent
-                            )
-                        )
-                    api.sendHeartbeat(token = token, body = body)
-                }
-                val ids = batch.map { it.id }
-                heartbeatQueueDao.markSynced(ids)
-                heartbeatQueueDao.deleteSynced()
-                flushed += batch.size
-            } catch (e: Exception) {
-                Log.w(TAG, "Heartbeat flush failed: ${e.message}")
-                break
-            }
+        return try {
+            val body = latest.payloadJson
+                ?.let(HeartbeatPayloadCodec::decode)
+                ?.let(HeartbeatPayloadNormalizer::normalize)
+                ?: HeartbeatPayloadNormalizer.normalize(
+                    HeartbeatRequest(
+                        cpu = latest.cpu,
+                        ram = latest.ram,
+                        temp = latest.temp,
+                        currentContent = latest.currentContent
+                    )
+                )
+            api.sendHeartbeat(token = token, body = body)
+            1
+        } catch (e: Exception) {
+            Log.w(TAG, "Heartbeat flush failed: ${e.message}")
+            0
         }
-
-        return flushed
     }
 
     suspend fun queuePopLog(record: PopLogRecord) {
@@ -264,17 +252,9 @@ class TelemetryRepository @Inject constructor(
         popHealthTracker.recordGenerated()
         val pending = popLogDao.getUnsyncedCount()
         PopTelemetryLogger.logQueueStatus(pending)
-
-        if (!popConfigManager.isUploadEnabled()) {
-            PopTelemetryLogger.logSkipped("upload_paused")
-            Log.d(TAG, "Queued PoP for ${record.assetName} (upload paused) pending=$pending")
-            return
-        }
-
-        val synced = flushPopLogs()
         Log.d(
             TAG,
-            "Queued PoP for ${record.assetName} (${record.status}), synced=$synced pending=${popLogDao.getUnsyncedCount()}"
+            "Queued PoP for ${record.assetName} (${record.status}) pending=$pending"
         )
     }
 
@@ -569,7 +549,6 @@ class TelemetryRepository @Inject constructor(
             playlistName = playlistName,
             playlistId = playlistId,
             assetId = assetId,
-            deviceId = deviceId,
             startTime = start,
             timestamp = start,
             endTime = endTime,

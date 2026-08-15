@@ -229,6 +229,11 @@ class ContentSyncCoordinator @Inject constructor(
             )
 
             when {
+                response.syncRequired &&
+                    !response.revision.isNullOrBlank() &&
+                    !storedRevision.isNullOrBlank() &&
+                    response.revision == storedRevision ->
+                    RevisionPollOutcome(shouldSync = false, reason = "syncRequired.alreadyApplied")
                 response.syncRequired ->
                     RevisionPollOutcome(shouldSync = true, reason = "syncRequired")
                 response.initialSyncPending ->

@@ -171,7 +171,7 @@ data class SyncRevisionResponse(
     val playlistId: String? = null,
     val layoutId: String? = null,
     val initialSyncPending: Boolean = false,
-    val revisionPollIntervalSeconds: Int = 5,
+    val revisionPollIntervalSeconds: Int = 300,
     val syncIntervalSeconds: Int = 120,
     val stretchToFit: Boolean? = null,
     val orientation: String? = null,
@@ -401,7 +401,7 @@ data class AssetInfo(
 
 /**
  * Payload sent to POST /player/pop-logs.
- * Device identity comes from the Authorization header — do not send deviceName.
+ * Device identity comes from the Authorization header — do not send deviceName or deviceId.
  */
 data class PopLogEntry(
     val assetName: String? = null,
@@ -409,7 +409,6 @@ data class PopLogEntry(
     val playlistName: String? = null,
     val playlistId: String? = null,
     val assetId: String? = null,
-    val deviceId: String? = null,
     val status: String,                 // "VERIFIED" or "FAILED"
     val startTime: String? = null,      // ISO 8601
     val endTime: String? = null,        // ISO 8601

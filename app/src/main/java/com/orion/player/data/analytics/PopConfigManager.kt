@@ -40,7 +40,7 @@ class PopConfigManager @Inject constructor(
     fun isCollectEnabled(): Boolean = true
 
     /** Upload may be paused by CMS without dropping the local queue. */
-    fun isUploadEnabled(): Boolean = configured.get() && uploadEnabled.get()
+    fun isUploadEnabled(): Boolean = !configured.get() || uploadEnabled.get()
 
     /** @deprecated Use [isUploadEnabled] / [isCollectEnabled]. */
     fun isPopEnabled(): Boolean = isUploadEnabled()

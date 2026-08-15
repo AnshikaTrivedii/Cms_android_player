@@ -23,7 +23,8 @@ class PopLogFlushScheduler @Inject constructor(
     private val popConfigManager: PopConfigManager
 ) {
     companion object {
-        const val DEFAULT_INTERVAL_MS = 90_000L
+        /** 10 min — raise later for production (e.g. 6 * 60 * 60 * 1000L). */
+        const val DEFAULT_INTERVAL_MS = 10 * 60 * 1000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

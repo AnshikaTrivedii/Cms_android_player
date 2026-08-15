@@ -21,7 +21,16 @@ object HeartbeatPayloadNormalizer {
             playbackUptimeSeconds = request.playbackUptimeSeconds?.coerceIn(0L, Int.MAX_VALUE.toLong()),
             storageTotalBytes = request.storageTotalBytes?.coerceIn(0L, MAX_INT_BYTES),
             storageFreeBytes = request.storageFreeBytes?.coerceIn(0L, MAX_INT_BYTES),
-            permissions = request.permissions
+            // CMS HeartbeatDto rejects these extra properties.
+            playback = null,
+            popPendingCount = null,
+            popLastGeneratedAt = null,
+            popLastUploadedAt = null,
+            popLastError = null,
+            permissions = request.permissions?.copy(
+                defaultHome = null,
+                deviceOwner = null
+            )
         )
     }
 

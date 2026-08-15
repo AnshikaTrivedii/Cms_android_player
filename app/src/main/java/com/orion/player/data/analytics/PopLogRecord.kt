@@ -39,7 +39,6 @@ data class PopLogRecord(
         playlistName = playlistName,
         playlistId = playlistId,
         assetId = assetId,
-        deviceId = deviceId,
         startTime = startTime.toString(),
         timestamp = startTime.toString(),
         endTime = endTime.toString(),

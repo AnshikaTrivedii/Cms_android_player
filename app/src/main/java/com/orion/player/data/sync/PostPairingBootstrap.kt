@@ -13,7 +13,7 @@ import javax.inject.Singleton
 
 /**
  * Runs immediately after pairing succeeds so the first heartbeat and initial sync
- * begin without waiting for playback or the 60s heartbeat timer.
+ * begin without waiting for playback or the 10-minute heartbeat timer.
  */
 @Singleton
 class PostPairingBootstrap @Inject constructor(

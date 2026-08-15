@@ -222,7 +222,7 @@ class SecurePrefs @Inject constructor(
         get() = prefs.getInt(KEY_SYNC_INTERVAL_SECONDS, SyncConfig.DEFAULT_SYNC_INTERVAL_SECONDS)
         set(value) = prefs.edit().putInt(KEY_SYNC_INTERVAL_SECONDS, value).apply()
 
-    /** Seconds between lightweight /player/sync-revision polls (server-configurable, default 5). */
+    /** Seconds between lightweight /player/sync-revision polls (default 5 min; server cannot go below). */
     var revisionPollIntervalSeconds: Int
         get() = prefs.getInt(KEY_REVISION_POLL_INTERVAL_SECONDS, SyncConfig.DEFAULT_REVISION_POLL_INTERVAL_SECONDS)
         set(value) = prefs.edit().putInt(KEY_REVISION_POLL_INTERVAL_SECONDS, value).apply()
