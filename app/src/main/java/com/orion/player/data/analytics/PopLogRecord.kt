@@ -42,7 +42,7 @@ data class PopLogRecord(
         startTime = startTime.toString(),
         timestamp = startTime.toString(),
         endTime = endTime.toString(),
-        durationSeconds = durationSeconds,
+        durationSeconds = durationSeconds.takeIf { it >= 1 },
         status = status
     )
 

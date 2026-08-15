@@ -559,7 +559,7 @@ class TelemetryRepository @Inject constructor(
             startTime = start,
             timestamp = start,
             endTime = endTime,
-            durationSeconds = durationSeconds,
+            durationSeconds = durationSeconds.takeIf { it >= 1 },
             status = status
         )
     }
