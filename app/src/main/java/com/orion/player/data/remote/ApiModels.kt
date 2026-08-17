@@ -137,7 +137,8 @@ data class HeartbeatResponse(
     val defaultUrlDuration: Int? = null,
     val defaultVideoDuration: Int? = null,
     val activeSchedule: ActiveScheduleInfo? = null,
-    val serverTime: String? = null
+    val serverTime: String? = null,
+    @SerializedName("cacheCommand") val cacheCommand: CacheCommandInfo? = null
 )
 
 data class PlayerFeatures(
@@ -171,7 +172,7 @@ data class SyncRevisionResponse(
     val playlistId: String? = null,
     val layoutId: String? = null,
     val initialSyncPending: Boolean = false,
-    val revisionPollIntervalSeconds: Int = 300,
+    val revisionPollIntervalSeconds: Int = 5,
     val syncIntervalSeconds: Int = 120,
     val stretchToFit: Boolean? = null,
     val orientation: String? = null,
@@ -229,6 +230,18 @@ data class SyncResponse(
     fun resolvedCurrentAssetIds(): Set<String> = currentAssetIds.orEmpty().toSet()
     fun resolvedRemovedAssetIds(): Set<String> = removedAssetIds.orEmpty().toSet()
     val isLayoutMode: Boolean get() = layout != null
+
+    /**
+     * Playback loop from this sync payload. [assets] is always the source of truth
+     * (position + durationSeconds). When [currentAssetIds] is present, drop slots
+     * whose ids are no longer current.
+     */
+    fun playbackLoopAssets(): List<AssetInfo> {
+        val all = resolvedAssets()
+        val currentIds = resolvedCurrentAssetIds()
+        if (currentIds.isEmpty()) return all
+        return all.filter { it.id in currentIds }
+    }
 
     /** Treat inline assets as a fresh manifest even when the server marked the response unchanged. */
     fun withUpdatedManifest(assets: List<AssetInfo>): SyncResponse =
@@ -514,7 +527,8 @@ data class DeviceReportResponse(
     val initialSyncTimeoutSeconds: Int? = null,
     val features: PlayerFeatures? = null,
     val commands: List<com.orion.player.data.enterprise.RemoteCommand>? = null,
-    val pendingCommand: PendingRemoteCommand? = null
+    val pendingCommand: PendingRemoteCommand? = null,
+    @SerializedName("cacheCommand") val cacheCommand: CacheCommandInfo? = null
 )
 
 data class SystemLogEntry(

@@ -12,7 +12,7 @@ import javax.inject.Singleton
 class RevisionPollIntervalConfig @Inject constructor(
     private val securePrefs: SecurePrefs
 ) {
-    private val _intervalSeconds = MutableStateFlow(clamp(securePrefs.revisionPollIntervalSeconds))
+    private val _intervalSeconds = MutableStateFlow(initialInterval())
     val intervalSeconds: StateFlow<Int> = _intervalSeconds.asStateFlow()
 
     init {
@@ -32,11 +32,19 @@ class RevisionPollIntervalConfig @Inject constructor(
         return true
     }
 
+    private fun initialInterval(): Int {
+        val stored = securePrefs.revisionPollIntervalSeconds
+        // Previous client floored this at 5 minutes; treat that stored default as unset.
+        if (stored == LEGACY_DEFAULT_SECONDS) return DEFAULT_SECONDS
+        return clamp(stored)
+    }
+
     companion object {
         private const val TAG = "OrionSync"
-        const val DEFAULT_SECONDS = 5 * 60
-        const val MIN_SECONDS = 5 * 60
+        const val DEFAULT_SECONDS = 5
+        const val MIN_SECONDS = 5
         const val MAX_SECONDS = 60 * 60
+        private const val LEGACY_DEFAULT_SECONDS = 5 * 60
 
         private fun clamp(seconds: Int?): Int =
             (seconds ?: DEFAULT_SECONDS).coerceIn(MIN_SECONDS, MAX_SECONDS)

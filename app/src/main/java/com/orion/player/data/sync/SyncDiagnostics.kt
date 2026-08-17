@@ -62,7 +62,9 @@ object SyncDiagnostics {
                 "playlistName=${playlist?.name.orEmpty()} " +
                 "layoutId=${layout?.id.orEmpty()} layoutZones=${layout?.zones?.size ?: 0} " +
                 "unchanged=${response.unchanged} " +
-                "assetCount=${response.resolvedAssets().size}"
+                "assetCount=${response.resolvedAssets().size} " +
+                "tickerCount=${response.resolvedTickers().size} " +
+                "contentRevision=${response.contentRevision.orEmpty()}"
         )
         Log.i(
             TAG,

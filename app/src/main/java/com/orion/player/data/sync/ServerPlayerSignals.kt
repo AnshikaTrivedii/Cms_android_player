@@ -1,6 +1,7 @@
 package com.orion.player.data.sync
 
 import com.orion.player.data.enterprise.RemoteCommand
+import com.orion.player.data.remote.CacheCommandInfo
 import com.orion.player.data.remote.DeviceReportResponse
 import com.orion.player.data.remote.HeartbeatResponse
 import com.orion.player.data.remote.PlayerFeatures
@@ -19,10 +20,27 @@ data class ServerPlayerSignals(
     val initialSyncTimeoutSeconds: Int? = null,
     val popLogsExpected: Boolean? = null,
     val features: PlayerFeatures? = null,
-    val commands: List<RemoteCommand>? = null
+    val commands: List<RemoteCommand>? = null,
+    val cacheCommand: CacheCommandInfo? = null
 ) {
     fun forceSyncCommand(): RemoteCommand? =
-        commands?.firstOrNull { isForceSyncType(it.type) }
+        mergedCommands().firstOrNull { isForceSyncType(it.type) }
+
+    fun mergedCommands(): List<RemoteCommand> {
+        val fromList = commands.orEmpty()
+        val fromCache = cacheCommand
+            ?.takeIf { it.command.isNotBlank() }
+            ?.let { RemoteCommand(id = it.id, type = it.command) }
+            ?: return fromList
+        val duplicate = fromList.any { existing ->
+            (!existing.id.isNullOrBlank() && existing.id == fromCache.id) ||
+                (isForceSyncType(existing.type) && isForceSyncType(fromCache.type))
+        }
+        return if (duplicate) fromList else fromList + fromCache
+    }
+
+    fun commandsExcludingForceSync(): List<RemoteCommand> =
+        mergedCommands().filterNot { isForceSyncType(it.type) }
 
     companion object {
         fun from(response: HeartbeatResponse): ServerPlayerSignals =
@@ -35,7 +53,8 @@ data class ServerPlayerSignals(
                 initialSyncTimeoutSeconds = response.initialSyncTimeoutSeconds,
                 popLogsExpected = response.popLogsExpected,
                 features = response.features,
-                commands = response.commands
+                commands = response.commands,
+                cacheCommand = response.cacheCommand
             )
 
         fun from(response: SyncResponse): ServerPlayerSignals =
@@ -48,7 +67,8 @@ data class ServerPlayerSignals(
                 initialSyncTimeoutSeconds = response.initialSyncTimeoutSeconds,
                 popLogsExpected = response.popLogsExpected,
                 features = response.features,
-                commands = response.commands
+                commands = response.commands,
+                cacheCommand = response.cacheCommand
             )
 
         fun from(response: DeviceReportResponse): ServerPlayerSignals =
@@ -58,7 +78,8 @@ data class ServerPlayerSignals(
                 initialSyncTimeoutSeconds = response.initialSyncTimeoutSeconds,
                 popLogsExpected = response.popLogsExpected,
                 features = response.features,
-                commands = response.commands
+                commands = response.commands,
+                cacheCommand = response.cacheCommand
             )
 
         fun isForceSyncType(type: String): Boolean =

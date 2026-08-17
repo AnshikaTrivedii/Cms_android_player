@@ -53,7 +53,9 @@ object LayoutAssetResolver {
                     zone = zone,
                     assets = emptyList(),
                     currentIndex = 0,
-                    ticker = zone.ticker?.toDisplayConfig()
+                    ticker = zone.ticker
+                        ?.takeIf { it.isActive != false && !it.text.isNullOrBlank() }
+                        ?.toDisplayConfig()
                 )
                 ZoneType.IMAGE -> ZoneSnapshot(
                     zone = zone,

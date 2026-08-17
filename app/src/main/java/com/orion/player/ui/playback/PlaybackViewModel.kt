@@ -16,7 +16,6 @@ import com.orion.player.data.playback.PlaybackEngineLogger
 import com.orion.player.data.playback.PlaybackSlotLogger
 import com.orion.player.data.playback.PlaylistManifestLogger
 import com.orion.player.data.playback.inPlaylistOrder
-import com.orion.player.data.playback.hasExplicitDuration
 import com.orion.player.data.playback.DocumentFormat
 import com.orion.player.data.playback.resolvePlaybackDuration
 import com.orion.player.data.playback.playbackSlotDurationMs
@@ -26,7 +25,6 @@ import com.orion.player.data.remote.AssetType
 import com.orion.player.data.remote.AssetType.deferPopStartUntilReady
 import com.orion.player.data.remote.AssetType.isPlayable
 import com.orion.player.data.remote.AssetType.normalizedType
-import com.orion.player.data.remote.AssetType.playlistManifestChangedFrom
 import com.orion.player.data.enterprise.DeviceLogCollector
 import com.orion.player.data.enterprise.RemoteCommandExecutor
 import com.orion.player.data.remote.HeartbeatResponse
@@ -51,6 +49,7 @@ import com.orion.player.data.sync.RevisionPollScheduler
 import com.orion.player.data.sync.SyncDiagnostics
 import com.orion.player.data.sync.SyncOutcome
 import com.orion.player.data.ticker.TickerDisplayConfig
+import com.orion.player.data.ticker.TickerStateStore
 import com.orion.player.util.NetworkMonitor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CompletableDeferred
@@ -90,7 +89,8 @@ class PlaybackViewModel @Inject constructor(
     private val deviceConfigManager: DeviceConfigManager,
     private val activeScheduleTracker: ActiveScheduleTracker,
     private val assignedPlaylistStore: AssignedPlaylistStore,
-    private val scheduleExpiryController: ScheduleExpiryController
+    private val scheduleExpiryController: ScheduleExpiryController,
+    private val tickerStateStore: TickerStateStore
 ) : ViewModel() {
 
     companion object {
@@ -129,6 +129,8 @@ class PlaybackViewModel @Inject constructor(
     val isUnpaired: StateFlow<Boolean> = _isUnpaired.asStateFlow()
 
     val stretchToFit: StateFlow<Boolean> = deviceConfigManager.stretchToFit
+    val overlayTickers: StateFlow<List<TickerDisplayConfig>> = tickerStateStore.tickers
+    val tickerEnabled: StateFlow<Boolean> = deviceConfigManager.tickerEnabled
 
     init {
         healthMonitor.recordStartupInit()
@@ -155,7 +157,7 @@ class PlaybackViewModel @Inject constructor(
             requestContentSync(force = false, reason = reason)
         }
         revisionPollScheduler.registerSyncHandler { reason ->
-            requestContentSync(force = false, reason = reason)
+            requestContentSync(force = true, reason = reason)
             true
         }
         contentSyncCoordinator.registerRetrySyncHandler {
@@ -195,7 +197,10 @@ class PlaybackViewModel @Inject constructor(
     }
 
     private fun currentSnapshot(): PlaybackSnapshot? {
-        if (playlistAssets.isEmpty() && assets.isEmpty()) return null
+        val overlay = tickerStateStore.tickers.value
+        if (playlistAssets.isEmpty() && assets.isEmpty() && currentTickers.isEmpty() && overlay.isEmpty()) {
+            return null
+        }
         return PlaybackSnapshot(
             mode = PlaybackMode.FULL_SCREEN,
             assets = assets,
@@ -206,7 +211,7 @@ class PlaybackViewModel @Inject constructor(
             layout = null,
             playlistAssets = playlistAssets,
             currentIndex = _currentAssetIndex.value,
-            tickers = currentTickers,
+            tickers = overlay.ifEmpty { currentTickers },
             zones = emptyList(),
             zoneIndices = emptyMap()
         )
@@ -299,6 +304,8 @@ class PlaybackViewModel @Inject constructor(
                         val fallback = contentSyncCoordinator.loadCachedSnapshot()
                         if (fallback != null && snapshotIsPlayable(fallback)) {
                             applySnapshot(fallback, structureChanged = true)
+                        } else if (tickerStateStore.tickers.value.isNotEmpty()) {
+                            _uiState.value = PlaybackUiState.NoContent
                         } else {
                             val reason = "Sync unchanged and no playable local cache"
                             SyncDiagnostics.logWaitingScreen(reason, "startPlayback.Unchanged")
@@ -515,7 +522,6 @@ class PlaybackViewModel @Inject constructor(
                 is SyncOutcome.Unpaired -> handleUnpaired()
                 is SyncOutcome.NoContent -> {
                     if (!isDisplayingContent()) {
-                        stopPlayback()
                         _uiState.value = PlaybackUiState.NoContent
                     }
                 }
@@ -555,9 +561,14 @@ class PlaybackViewModel @Inject constructor(
     private fun isDisplayingContent(): Boolean =
         uiState.value is PlaybackUiState.PlayingFullScreen
 
-    private fun applySnapshotIfPlayable(snapshot: PlaybackSnapshot, structureChanged: Boolean) {
+    private suspend fun applySnapshotIfPlayable(snapshot: PlaybackSnapshot, structureChanged: Boolean) {
         if (snapshotIsPlayable(snapshot)) {
             applySnapshot(snapshot, structureChanged, fromSync = true)
+        } else if (hasOverlayTicker(snapshot)) {
+            currentTickers = overlayTickersFor(snapshot)
+            if (!isDisplayingContent()) {
+                _uiState.value = PlaybackUiState.NoContent
+            }
         } else if (isDisplayingContent()) {
             PlaybackEngineLogger.logPlaybackContinuedDuringSync(
                 assetName = playlistAssets.getOrNull(_currentAssetIndex.value)?.name.orEmpty(),
@@ -575,6 +586,12 @@ class PlaybackViewModel @Inject constructor(
         }
     }
 
+    private fun hasOverlayTicker(snapshot: PlaybackSnapshot): Boolean =
+        snapshot.tickers.isNotEmpty() || tickerStateStore.tickers.value.isNotEmpty()
+
+    private fun overlayTickersFor(snapshot: PlaybackSnapshot): List<TickerDisplayConfig> =
+        snapshot.tickers.ifEmpty { tickerStateStore.tickers.value }
+
     private fun normalizedSnapshot(snapshot: PlaybackSnapshot): PlaybackSnapshot {
         val newAssets = snapshot.playlistAssets.ifEmpty { snapshot.assets }.inPlaylistOrder()
         return snapshot.copy(
@@ -584,53 +601,18 @@ class PlaybackViewModel @Inject constructor(
         )
     }
 
-    private fun stagePendingSnapshot(snapshot: PlaybackSnapshot, reason: String) {
-        val normalized = normalizedSnapshot(snapshot)
-        val currentIndex = _currentAssetIndex.value
-        val currentAssetId = playlistAssets.getOrNull(currentIndex)?.id
-        val newIds = normalized.playlistAssets.map { it.id }
-        val oldIds = playlistAssets.map { it.id }
-        val resolvedIndex = when {
-            // Same multiset order (including duplicates) — keep the exact slot.
-            oldIds == newIds ->
-                currentIndex.coerceIn(0, (newIds.size - 1).coerceAtLeast(0))
-            currentAssetId != null &&
-                normalized.playlistAssets.getOrNull(currentIndex)?.id == currentAssetId ->
-                currentIndex
-            currentAssetId != null -> {
-                val idxInNew = normalized.playlistAssets.indexOfFirst { it.id == currentAssetId }
-                if (idxInNew >= 0) idxInNew else 0
-            }
-            else -> currentIndex.coerceIn(
-                0,
-                (normalized.playlistAssets.size - 1).coerceAtLeast(0)
-            )
-        }
-        pendingSnapshot = normalized.copy(currentIndex = resolvedIndex)
-        localFiles = normalized.localFiles
-        currentTickers = normalized.tickers
-        playlistInfo = normalized.playlistInfo
-        playlistVersion = normalized.playlistVersion
-        PlaybackEngineLogger.logQueueStaged(
-            oldSize = playlistAssets.size,
-            newSize = normalized.playlistAssets.size,
-            playlistVersion = normalized.playlistVersion,
-            reason = reason,
-            currentAsset = playlistAssets.getOrNull(_currentAssetIndex.value)?.name.orEmpty()
-        )
-        PlaybackSlotLogger.logPendingSnapshotDeferred(
-            reason = reason,
-            currentAsset = playlistAssets.getOrNull(_currentAssetIndex.value)?.name.orEmpty()
-        )
-    }
-
-    private fun applySnapshot(
+    private suspend fun applySnapshot(
         snapshot: PlaybackSnapshot,
         structureChanged: Boolean,
         fromSync: Boolean = false
     ) {
         val normalized = normalizedSnapshot(snapshot)
         val newAssets = normalized.playlistAssets
+        val previousAssets = playlistAssets
+        val previousVersion = playlistVersion
+        val wasDisplaying = isDisplayingContent()
+        val currentIndex = _currentAssetIndex.value
+        val currentAsset = previousAssets.getOrNull(currentIndex)
 
         PlaylistManifestLogger.logManifest(
             source = "apply",
@@ -640,53 +622,50 @@ class PlaybackViewModel @Inject constructor(
             assets = newAssets
         )
 
-        val orderChanged = playlistAssets.map { it.id } != newAssets.map { it.id }
-        val sizeChanged = playlistAssets.size != newAssets.size
-        val versionChanged = playlistVersion != normalized.playlistVersion
-        val metadataChanged = playlistAssets.isNotEmpty() &&
-            newAssets.playlistManifestChangedFrom(playlistAssets)
-        val structuralChange = orderChanged || sizeChanged || structureChanged
-
         PlaybackEngineLogger.logDurationChangesFromSync(
-            previous = playlistAssets,
+            previous = previousAssets,
             synced = newAssets,
             playlistVersion = normalized.playlistVersion
         )
 
-        localFiles = normalized.localFiles
-        currentTickers = normalized.tickers
-        playlistInfo = normalized.playlistInfo
-        playlistVersion = normalized.playlistVersion
-
-        if (isDisplayingContent()) {
-            mergePlaylistMetadataInPlace(newAssets)
-            if (structuralChange) {
-                // Keep the current playlist on screen until the slot ends — a schedule
-                // switch must never blank the display mid-asset.
-                pendingSnapshotFromSync = fromSync
-                stagePendingSnapshot(
-                    normalized,
-                    reason = when {
-                        orderChanged -> "order changed"
-                        sizeChanged -> "asset count changed"
-                        else -> "structure changed"
-                    }
-                )
-                return
-            }
-            if (metadataChanged) {
-                emitFullScreen()
+        if (newAssets.isEmpty()) {
+            localFiles = normalized.localFiles
+            currentTickers = normalized.tickers
+            playlistInfo = normalized.playlistInfo
+            playlistVersion = normalized.playlistVersion
+            if (!wasDisplaying) {
+                _uiState.value = PlaybackUiState.NoContent
             }
             return
         }
 
+        val currentRemoved = currentAsset != null && newAssets.none { it.id == currentAsset.id }
+        val resolvedIndex = resolveLiveQueueIndex(
+            previousAssets = previousAssets,
+            newAssets = newAssets,
+            currentIndex = currentIndex,
+            currentAssetId = currentAsset?.id
+        )
+
+        PlaylistRefreshLogger.logLoopRebuilt(
+            playlistId = normalized.playlistInfo?.id,
+            previousVersion = previousVersion,
+            newVersion = normalized.playlistVersion,
+            assetCount = newAssets.size,
+            rebuiltLoop = true
+        )
+
         pendingSnapshot = null
         pendingSnapshotFromSync = false
+        localFiles = normalized.localFiles
+        currentTickers = normalized.tickers
+        playlistInfo = normalized.playlistInfo
+        playlistVersion = normalized.playlistVersion
         mode = PlaybackMode.FULL_SCREEN
         assets = newAssets
         playlistAssets = newAssets
-        _currentAssetIndex.value = normalized.currentIndex
-        healthMonitor.recordQueueProgress(normalized.currentIndex)
+        _currentAssetIndex.value = resolvedIndex
+        healthMonitor.recordQueueProgress(resolvedIndex)
 
         PlaylistManifestLogger.logQueue(
             playlist = playlistInfo,
@@ -694,14 +673,37 @@ class PlaybackViewModel @Inject constructor(
             assets = playlistAssets,
             currentIndex = _currentAssetIndex.value
         )
+        PlaylistRefreshLogger.logQueueRebuilt(
+            playlistName = playlistInfo?.name.orEmpty(),
+            assetCount = playlistAssets.size,
+            resetIndex = currentRemoved || structureChanged && !wasDisplaying,
+            newVersion = playlistVersion
+        )
 
-        if (structuralChange || metadataChanged || versionChanged) {
-            PlaylistRefreshLogger.logQueueRebuilt(
-                playlistName = playlistInfo?.name.orEmpty(),
-                assetCount = playlistAssets.size,
-                resetIndex = structuralChange,
-                newVersion = playlistVersion
-            )
+        if (wasDisplaying) {
+            notifyPlaylistLive(fromSync)
+            if (currentRemoved) {
+                activePopSession?.takeIf { !it.finalized }?.let { session ->
+                    finalizePopSession("FAILED", session)
+                }
+                emitFullScreen()
+                startSlotLoop(resetGeneration = true)
+                return
+            }
+            val playing = _uiState.value
+            if (playing is PlaybackUiState.PlayingFullScreen &&
+                playing.asset.id == playlistAssets.getOrNull(resolvedIndex)?.id
+            ) {
+                _uiState.value = playing.copy(
+                    currentIndex = resolvedIndex,
+                    totalAssets = playlistAssets.size,
+                    playlistName = playlistInfo?.name.orEmpty(),
+                    tickers = currentTickers
+                )
+            } else {
+                emitFullScreen()
+            }
+            return
         }
 
         emitFullScreen()
@@ -712,8 +714,42 @@ class PlaybackViewModel @Inject constructor(
             total = playlistAssets.size
         )
         notifyPlaylistLive(fromSync)
-
         startSlotLoop(resetGeneration = true)
+    }
+
+    /**
+     * Keep the currently playing occurrence when it is still in the new loop.
+     * If it was removed, skip to the next remaining item (or the first).
+     */
+    private fun resolveLiveQueueIndex(
+        previousAssets: List<AssetInfo>,
+        newAssets: List<AssetInfo>,
+        currentIndex: Int,
+        currentAssetId: String?
+    ): Int {
+        if (newAssets.isEmpty()) return 0
+        val last = newAssets.lastIndex
+        val oldIds = previousAssets.map { it.id }
+        val newIds = newAssets.map { it.id }
+        if (oldIds == newIds) {
+            return currentIndex.coerceIn(0, last)
+        }
+        if (currentAssetId == null) {
+            return 0
+        }
+        if (newAssets.none { it.id == currentAssetId }) {
+            val nextRemaining = previousAssets
+                .drop(currentIndex + 1)
+                .firstOrNull { old -> newAssets.any { it.id == old.id } }
+                ?: previousAssets.firstOrNull { old -> newAssets.any { it.id == old.id } }
+            val idx = nextRemaining?.let { match -> newAssets.indexOfFirst { it.id == match.id } } ?: 0
+            return idx.coerceIn(0, last)
+        }
+        if (newAssets.getOrNull(currentIndex)?.id == currentAssetId) {
+            return currentIndex
+        }
+        val idxInNew = newAssets.indexOfFirst { it.id == currentAssetId }
+        return if (idxInNew >= 0) idxInNew else 0
     }
 
     /**
@@ -730,29 +766,6 @@ class PlaybackViewModel @Inject constructor(
         } else {
             activeScheduleTracker.onCachedPlaylistRestored(playlistInfo?.name)
         }
-    }
-
-    /** Apply latest CMS metadata (duration, name, etc.) without reordering the active queue. */
-    private fun mergePlaylistMetadataInPlace(syncedAssets: List<AssetInfo>) {
-        if (playlistAssets.isEmpty()) return
-        val syncedOrdered = syncedAssets.inPlaylistOrder()
-        playlistAssets = playlistAssets.mapIndexed { index, current ->
-            val synced = syncedOrdered.getOrNull(index)
-            // Match by queue index + asset id so duplicate ids keep per-occurrence durations.
-            if (synced != null && synced.id == current.id) {
-                if (current.cmsDurationSeconds != synced.cmsDurationSeconds) {
-                    PlaybackEngineLogger.logDurationMergedInMemory(
-                        assetName = current.name,
-                        oldDurationSec = current.cmsDurationSeconds,
-                        newDurationSec = synced.cmsDurationSeconds
-                    )
-                }
-                synced
-            } else {
-                current
-            }
-        }
-        assets = playlistAssets
     }
 
     private fun startSlotLoop(resetGeneration: Boolean) {
@@ -812,8 +825,7 @@ class PlaybackViewModel @Inject constructor(
                     playVideoSlot(
                         queueIndex = index,
                         asset = asset,
-                        configuredMs = configuredMs,
-                        defaultsAtSlotStart = defaultsAtSlotStart
+                        configuredMs = configuredMs
                     )
                 } finally {
                     healthMonitor.recordVideoSlotActive(false)
@@ -822,8 +834,7 @@ class PlaybackViewModel @Inject constructor(
             else -> playTimedSlot(
                 queueIndex = index,
                 asset = asset,
-                configuredMs = configuredMs,
-                defaultsAtSlotStart = defaultsAtSlotStart
+                configuredMs = configuredMs
             )
         }
 
@@ -878,41 +889,35 @@ class PlaybackViewModel @Inject constructor(
     private suspend fun playTimedSlot(
         queueIndex: Int,
         asset: AssetInfo,
-        configuredMs: Long,
-        defaultsAtSlotStart: DevicePlaybackDurations
+        configuredMs: Long
     ): String {
         if (asset.deferPopStartUntilReady()) {
             if (!awaitContentReady(asset.name)) return "FAILED"
         }
         val startTime = activePopSession?.contentReadyTime ?: Instant.now()
-        waitForConfiguredDuration(queueIndex, startTime, configuredMs, defaultsAtSlotStart)
+        waitForConfiguredDuration(queueIndex, startTime, configuredMs)
         return "VERIFIED"
     }
 
     private suspend fun playVideoSlot(
         queueIndex: Int,
         asset: AssetInfo,
-        configuredMs: Long,
-        defaultsAtSlotStart: DevicePlaybackDurations
+        configuredMs: Long
     ): String {
         if (asset.deferPopStartUntilReady()) {
             if (!awaitContentReady(asset.name)) return "FAILED"
         }
         // Always use this queue index — never find-by-id (duplicates share ids).
         val latest = playlistAssets.getOrNull(queueIndex) ?: asset
-        // Timed whenever a playlist override or a device video default applies;
-        // natural end only when neither is configured.
-        val timedMs = latest.playbackSlotDurationMs(defaultsAtSlotStart)
-        return if (timedMs > 0L) {
+        return if (configuredMs > 0L) {
             val startTime = activePopSession?.contentReadyTime ?: Instant.now()
-            waitForConfiguredDuration(queueIndex, startTime, configuredMs, defaultsAtSlotStart)
+            waitForConfiguredDuration(queueIndex, startTime, configuredMs)
             videoStopToken++
             emitFullScreen()
             delay(150L)
-            val configured = latest.playbackSlotDurationMs(defaultsAtSlotStart)
             PlaybackEngineLogger.logVideoDurationStop(
                 assetName = latest.name,
-                configuredMs = configured,
+                configuredMs = configuredMs,
                 actualMs = Duration.between(startTime, Instant.now()).toMillis()
             )
             "VERIFIED"
@@ -926,27 +931,22 @@ class PlaybackViewModel @Inject constructor(
     }
 
     /**
-     * Polls the live queue so playlist duration overrides can update mid-slot.
-     * Device default changes are frozen at [slotStartConfiguredMs] / [defaultsAtSlotStart]
-     * so the current asset finishes normally.
+     * Hold the duration captured at slot start. Playlist duration edits apply on
+     * this asset's next play; the in-memory loop is already the new timeline.
      */
     private suspend fun waitForConfiguredDuration(
         queueIndex: Int,
         startTime: Instant,
-        slotStartConfiguredMs: Long,
-        defaultsAtSlotStart: DevicePlaybackDurations
+        slotStartConfiguredMs: Long
     ) {
+        val targetMs = slotStartConfiguredMs.coerceAtLeast(1L)
         while (true) {
-            val asset = playlistAssets.getOrNull(queueIndex) ?: return
-            val targetMs = if (asset.hasExplicitDuration()) {
-                asset.playbackSlotDurationMs(defaultsAtSlotStart)
-            } else {
-                slotStartConfiguredMs
-            }.coerceAtLeast(1L)
             val elapsed = Duration.between(startTime, Instant.now()).toMillis()
             if (elapsed >= targetMs) {
+                val asset = playlistAssets.getOrNull(queueIndex)
+                    ?: playlistAssets.getOrNull(_currentAssetIndex.value)
                 PlaybackEngineLogger.logDurationUsedDuringPlayback(
-                    assetName = asset.name,
+                    assetName = asset?.name.orEmpty(),
                     configuredMs = targetMs,
                     actualMs = elapsed
                 )
@@ -1194,6 +1194,7 @@ class PlaybackViewModel @Inject constructor(
         activePopSession = null
         activeScheduleTracker.clear()
         assignedPlaylistStore.clear()
+        tickerStateStore.clear()
         healthMonitor.recordPlaybackExpected(false)
         _isUnpaired.value = true
     }
@@ -1250,6 +1251,8 @@ fun onUrlLoadFailed(assetName: String) {
         val expired = activeScheduleTracker.consumeLocalExpiry(source = "heartbeat")
         if (expired || scheduleSignal.reason == ActiveScheduleTracker.REASON_ENDED) {
             leaveExpiredSchedule(scheduleSignal.reason ?: "schedule.ended")
+        } else if (response.syncRequired == true) {
+            requestContentSync(force = true, reason = "heartbeat.syncRequired")
         } else if (contentSyncCoordinator.consumeRevisionIfChanged(response.contentRevision)) {
             requestContentSync(force = true, reason = "heartbeat.revision")
         } else if (scheduleSignal.shouldSync) {
@@ -1266,6 +1269,7 @@ fun onUrlLoadFailed(assetName: String) {
             contentSyncCoordinator.syncContent(
                 current = currentSnapshot(),
                 force = true,
+                completedCommandId = commandId,
                 onDownloadProgress = if (!displaying) {
                     { completed, total ->
                         viewModelScope.launch {
@@ -1288,18 +1292,23 @@ fun onUrlLoadFailed(assetName: String) {
             is SyncOutcome.Updated -> {
                 applySnapshotIfPlayable(outcome.snapshot, outcome.structureChanged)
                 telemetryRepository.flushAll()
-                snapshotIsPlayable(outcome.snapshot) || isDisplayingContent()
+                true
             }
             is SyncOutcome.Unchanged -> {
                 val fallback = contentSyncCoordinator.loadCachedSnapshot()
                 if (!isDisplayingContent() && fallback != null && snapshotIsPlayable(fallback)) {
                     applySnapshot(fallback, structureChanged = true)
-                    true
-                } else {
-                    isDisplayingContent()
+                } else if (!isDisplayingContent() && tickerStateStore.tickers.value.isNotEmpty()) {
+                    _uiState.value = PlaybackUiState.NoContent
                 }
+                true
             }
-            is SyncOutcome.NoContent -> false
+            is SyncOutcome.NoContent -> {
+                if (!isDisplayingContent()) {
+                    _uiState.value = PlaybackUiState.NoContent
+                }
+                true
+            }
             is SyncOutcome.Failed -> {
                 if (!isDisplayingContent()) {
                     val msg = outcome.message.ifBlank { "Content download failed" }

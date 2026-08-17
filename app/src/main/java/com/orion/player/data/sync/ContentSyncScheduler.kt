@@ -14,7 +14,7 @@ import javax.inject.Singleton
 
 /**
  * Schedules periodic full [GET /player/sync] polls using the server-configured interval.
- * Lightweight [GET /player/sync-revision] polling remains separate (~5s).
+ * Lightweight [GET /player/sync-revision] polling remains separate (default 5s).
  */
 @Singleton
 class ContentSyncScheduler @Inject constructor(

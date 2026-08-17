@@ -14,8 +14,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Loop A: lightweight GET /player/sync-revision every revisionPollIntervalSeconds (default 5 min).
+ * Loop A: lightweight GET /player/sync-revision every revisionPollIntervalSeconds (default 5s).
  * Primary change-detection path — triggers full sync immediately when revision or assignment changes.
+ * Compares the full contentRevision string (including the :tk… ticker suffix).
  */
 @Singleton
 class RevisionPollScheduler @Inject constructor(

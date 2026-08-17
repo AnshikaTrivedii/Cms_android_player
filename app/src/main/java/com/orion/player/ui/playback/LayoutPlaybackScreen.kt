@@ -81,6 +81,7 @@ fun LayoutPlaybackScreen(
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
+                            // zone.ticker == null → hide immediately; no cached overlay
                         }
                         ZoneType.IMAGE -> {
                             val asset = zoneState.assets.firstOrNull()

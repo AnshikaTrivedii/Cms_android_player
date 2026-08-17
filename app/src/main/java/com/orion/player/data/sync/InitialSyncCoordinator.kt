@@ -2,6 +2,7 @@ package com.orion.player.data.sync
 
 import android.util.Log
 import com.orion.player.data.analytics.PopConfigManager
+import com.orion.player.data.config.DeviceConfigManager
 import com.orion.player.data.enterprise.RemoteCommandExecutor
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.remote.DeviceReportResponse
@@ -29,6 +30,7 @@ class InitialSyncCoordinator @Inject constructor(
     private val syncIntervalConfig: SyncIntervalConfig,
     private val revisionPollIntervalConfig: RevisionPollIntervalConfig,
     private val popConfigManager: PopConfigManager,
+    private val deviceConfigManager: DeviceConfigManager,
     private val telemetryRepository: TelemetryRepository,
     private val remoteCommandExecutor: RemoteCommandExecutor
 ) {
@@ -69,12 +71,16 @@ class InitialSyncCoordinator @Inject constructor(
         // Never start another sync from a sync response — syncRequired=true here
         // is what created the GET /player/sync loop every ~1s.
         handleSignals(ServerPlayerSignals.from(response), allowImmediateSync = false)
-        response.commands?.takeIf { it.isNotEmpty() }?.let { remoteCommandExecutor.dispatch(it) }
+        ServerPlayerSignals.from(response).commandsExcludingForceSync()
+            .takeIf { it.isNotEmpty() }
+            ?.let { remoteCommandExecutor.dispatch(it) }
     }
 
     fun handleDeviceReportResponse(response: DeviceReportResponse) {
         handleSignals(ServerPlayerSignals.from(response), allowImmediateSync = false)
-        response.commands?.takeIf { it.isNotEmpty() }?.let { remoteCommandExecutor.dispatch(it) }
+        ServerPlayerSignals.from(response).mergedCommands()
+            .takeIf { it.isNotEmpty() }
+            ?.let { remoteCommandExecutor.dispatch(it) }
     }
 
     fun onPairingCompleted() {
@@ -87,6 +93,7 @@ class InitialSyncCoordinator @Inject constructor(
 
     private fun handleSignals(signals: ServerPlayerSignals, allowImmediateSync: Boolean) {
         popConfigManager.update(signals.popLogsExpected, signals.features)
+        deviceConfigManager.applyFeatures(signals.features)
         syncIntervalConfig.updateInterval(signals.syncIntervalSeconds)
         revisionPollIntervalConfig.updateInterval(signals.revisionPollIntervalSeconds)
 

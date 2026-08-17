@@ -40,9 +40,8 @@ class SyncStateStore @Inject constructor(
     }
 
     fun seedIfEmpty(revision: String?, playlistId: String?, layoutId: String?) {
-        if (lastStoredRevision.isNullOrBlank() && !revision.isNullOrBlank()) {
-            lastStoredRevision = revision
-        }
+        // Never seed revision here — contentRevision (including :tk…) is committed
+        // only after GET /player/sync has been applied.
         if (lastStoredPlaylistId.isNullOrBlank() && !playlistId.isNullOrBlank()) {
             lastStoredPlaylistId = playlistId
         }

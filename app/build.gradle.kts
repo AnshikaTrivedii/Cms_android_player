@@ -45,7 +45,11 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (keystorePropertiesFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -53,6 +57,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            buildConfigField("String", "BASE_URL", "\"http://10.0.3.2:3001/api/\"")
         }
     }
 

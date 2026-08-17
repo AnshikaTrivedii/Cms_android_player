@@ -6,7 +6,7 @@ package com.orion.player.data.sync
  */
 object SyncConfig {
     /** Lightweight revision check — small payload, safe to poll frequently. */
-    const val REVISION_POLL_INTERVAL_MS = 5 * 60 * 1000L
+    const val REVISION_POLL_INTERVAL_MS = 5_000L
 
     /** Full sync fallback when revision endpoint and SSE are unavailable. */
     @Deprecated("Use SyncIntervalConfig — server-driven, default 120s")
@@ -16,7 +16,7 @@ object SyncConfig {
     const val DEFAULT_SYNC_INTERVAL_SECONDS = 120
 
     /** Default revision poll interval when the server omits revisionPollIntervalSeconds. */
-    const val DEFAULT_REVISION_POLL_INTERVAL_SECONDS = 5 * 60
+    const val DEFAULT_REVISION_POLL_INTERVAL_SECONDS = 5
 
     /** Minimum gap between full sync executions (debounce burst triggers). */
     const val MIN_SYNC_DEBOUNCE_MS = 2_000L

@@ -63,4 +63,18 @@ object PlaylistRefreshLogger {
     fun logUnchangedAccepted(localVersion: Int?) {
         Log.d(TAG, "Playlist unchanged — local version=${localVersion ?: "none"} still current")
     }
+
+    fun logLoopRebuilt(
+        playlistId: String?,
+        previousVersion: Int?,
+        newVersion: Int?,
+        assetCount: Int,
+        rebuiltLoop: Boolean
+    ) {
+        Log.i(
+            TAG,
+            "playlistId=${playlistId.orEmpty()} previousVersion=${previousVersion ?: "none"} " +
+                "newVersion=${newVersion ?: "none"} assetCount=$assetCount rebuiltLoop=$rebuiltLoop"
+        )
+    }
 }

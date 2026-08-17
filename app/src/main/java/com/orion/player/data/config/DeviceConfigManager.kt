@@ -3,6 +3,7 @@ package com.orion.player.data.config
 import android.util.Log
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.remote.DisplayConfig
+import com.orion.player.data.remote.PlayerFeatures
 import com.orion.player.data.remote.PlayerPlaybackDurations
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +31,9 @@ class DeviceConfigManager @Inject constructor(
     val playbackDurations: StateFlow<DevicePlaybackDurations> = _playbackDurations.asStateFlow()
 
     private val _configVersion = MutableStateFlow(securePrefs.displayConfigVersion)
+
+    private val _tickerEnabled = MutableStateFlow(securePrefs.tickerEnabled)
+    val tickerEnabled: StateFlow<Boolean> = _tickerEnabled.asStateFlow()
 
     /**
      * Apply config from heartbeat / sync / revision / device-report.
@@ -140,6 +144,18 @@ class DeviceConfigManager @Inject constructor(
                     "video=${_playbackDurations.value.videoSeconds?.let { "${it}s" } ?: "natural-end"}"
             )
         }
+    }
+
+    /**
+     * `features.ticker === false` disables overlay and zone tickers. Default is true.
+     * A missing `ticker` field leaves the current value unchanged.
+     */
+    fun applyFeatures(features: PlayerFeatures?) {
+        val enabled = features?.ticker ?: return
+        if (enabled == _tickerEnabled.value) return
+        _tickerEnabled.value = enabled
+        securePrefs.tickerEnabled = enabled
+        Log.i(TAG, "features.ticker=$enabled")
     }
 
     companion object {

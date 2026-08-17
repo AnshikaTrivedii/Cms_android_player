@@ -182,6 +182,27 @@ class PlaylistCacheRepository @Inject constructor(
         }
     }
 
+    suspend fun replaceTickers(tickers: List<TickerDisplayConfig>) {
+        saveTickers(tickers)
+    }
+
+    suspend fun loadTickers(): List<TickerDisplayConfig> {
+        return playlistCacheDao.getTickers().map { cached ->
+            TickerDisplayConfig(
+                id = cached.tickerId,
+                text = cached.text,
+                scope = TickerScope.from(cached.scope),
+                position = TickerPosition.from(cached.position),
+                speed = TickerSpeed.from(cached.speed),
+                priority = TickerPriority.from(cached.priority),
+                heightPercent = TickerHeightPercent.clamp(cached.heightPercent),
+                style = TickerStyle.from(cached.style),
+                backgroundColorHex = cached.backgroundColor,
+                textColorHex = cached.textColor
+            )
+        }
+    }
+
     private suspend fun saveTickers(tickers: List<TickerDisplayConfig>) {
         playlistCacheDao.replaceTickers(
             tickers.mapIndexed { index, ticker ->
@@ -200,23 +221,6 @@ class PlaylistCacheRepository @Inject constructor(
                 )
             }
         )
-    }
-
-    private suspend fun loadTickers(): List<TickerDisplayConfig> {
-        return playlistCacheDao.getTickers().map { cached ->
-            TickerDisplayConfig(
-                id = cached.tickerId,
-                text = cached.text,
-                scope = TickerScope.from(cached.scope),
-                position = TickerPosition.from(cached.position),
-                speed = TickerSpeed.from(cached.speed),
-                priority = TickerPriority.from(cached.priority),
-                heightPercent = TickerHeightPercent.clamp(cached.heightPercent),
-                style = TickerStyle.from(cached.style),
-                backgroundColorHex = cached.backgroundColor,
-                textColorHex = cached.textColor
-            )
-        }
     }
 
     suspend fun loadSnapshot(): PlaybackSnapshot? {

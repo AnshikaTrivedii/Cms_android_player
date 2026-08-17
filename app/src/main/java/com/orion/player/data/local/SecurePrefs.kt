@@ -74,6 +74,7 @@ class SecurePrefs @Inject constructor(
         private const val KEY_DEFAULT_URL_DURATION = "default_url_duration_sec"
         private const val KEY_DEFAULT_VIDEO_DURATION = "default_video_duration_sec"
         private const val KEY_PLAYBACK_DURATIONS_CACHED = "playback_durations_cached"
+        private const val KEY_TICKER_ENABLED = "ticker_enabled"
     }
 
     /**
@@ -223,10 +224,15 @@ class SecurePrefs @Inject constructor(
         get() = prefs.getInt(KEY_SYNC_INTERVAL_SECONDS, SyncConfig.DEFAULT_SYNC_INTERVAL_SECONDS)
         set(value) = prefs.edit().putInt(KEY_SYNC_INTERVAL_SECONDS, value).apply()
 
-    /** Seconds between lightweight /player/sync-revision polls (default 5 min; server cannot go below). */
+    /** Seconds between lightweight /player/sync-revision polls (default 5s). */
     var revisionPollIntervalSeconds: Int
         get() = prefs.getInt(KEY_REVISION_POLL_INTERVAL_SECONDS, SyncConfig.DEFAULT_REVISION_POLL_INTERVAL_SECONDS)
         set(value) = prefs.edit().putInt(KEY_REVISION_POLL_INTERVAL_SECONDS, value).apply()
+
+    /** CMS `features.ticker`. Default true — omit/null must not hide tickers. */
+    var tickerEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TICKER_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_TICKER_ENABLED, value).apply()
 
     var lastStoredRevision: String?
         get() = prefs.getString(KEY_LAST_STORED_REVISION, null)
@@ -379,6 +385,7 @@ class SecurePrefs @Inject constructor(
             .remove(KEY_POP_LAST_GENERATED_AT)
             .remove(KEY_POP_LAST_UPLOADED_AT)
             .remove(KEY_POP_LAST_ERROR)
+            .remove(KEY_TICKER_ENABLED)
             .putBoolean(KEY_IS_PAIRED, false)
         if (hardwareId.isNotBlank()) {
             editor.remove(deviceTokenKey(hardwareId))

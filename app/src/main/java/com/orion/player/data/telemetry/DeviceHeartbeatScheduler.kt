@@ -7,6 +7,7 @@ import com.orion.player.data.remote.HeartbeatResponse
 import com.orion.player.data.repository.TelemetryRepository
 import com.orion.player.data.stability.StabilityMonitor
 import com.orion.player.data.sync.InitialSyncCoordinator
+import com.orion.player.data.sync.ServerPlayerSignals
 import com.orion.player.util.SessionGuard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -74,7 +75,10 @@ class DeviceHeartbeatScheduler @Inject constructor(
         val response = telemetryRepository.sendHeartbeat(body)
         response?.let { mapped ->
             initialSyncCoordinator.handleHeartbeatResponse(mapped)
-            mapped.commands?.let { remoteCommandExecutor.dispatch(it) }
+            val commands = ServerPlayerSignals.from(mapped).mergedCommands()
+            if (commands.isNotEmpty()) {
+                remoteCommandExecutor.dispatch(commands)
+            }
             _responses.emit(mapped)
         }
         stabilityMonitor.reportIfDue(

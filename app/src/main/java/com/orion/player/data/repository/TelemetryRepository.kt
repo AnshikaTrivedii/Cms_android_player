@@ -11,6 +11,7 @@ import com.orion.player.data.enterprise.CrashLogStore
 import com.orion.player.data.enterprise.DeviceLogsUploadRequest
 import com.orion.player.data.enterprise.DeviceLogCollector
 import com.orion.player.data.enterprise.RemoteCommand
+import com.orion.player.data.enterprise.RemoteCommandExecutor
 import com.orion.player.data.local.HeartbeatQueueDao
 import com.orion.player.data.local.PopLogDao
 import com.orion.player.data.local.QueuedHeartbeatEntity
@@ -31,6 +32,7 @@ import com.orion.player.data.config.DeviceConfigManager
 import com.orion.player.data.registration.DeviceRegistrationManager
 import com.orion.player.data.registration.DeviceRegistrationStatusParser
 import com.orion.player.data.repository.TelemetryRepository
+import com.orion.player.data.sync.ServerPlayerSignals
 import com.orion.player.data.sync.SyncIntervalConfig
 import com.orion.player.data.telemetry.HeartbeatPayloadBuilder
 import com.orion.player.data.telemetry.HeartbeatPayloadNormalizer
@@ -58,7 +60,8 @@ class TelemetryRepository @Inject constructor(
     private val syncIntervalConfig: SyncIntervalConfig,
     private val heartbeatPayloadBuilder: HeartbeatPayloadBuilder,
     private val deviceRegistrationManager: DeviceRegistrationManager,
-    private val deviceConfigManager: DeviceConfigManager
+    private val deviceConfigManager: DeviceConfigManager,
+    private val remoteCommandExecutor: RemoteCommandExecutor
 ) {
     companion object {
         private const val TAG = "OrionTelemetry"
@@ -499,7 +502,14 @@ class TelemetryRepository @Inject constructor(
                 commandError = commandError
             )
             val response = api.submitDeviceReport(token = token, body = body)
-            mapDeviceReportResponse(response)
+            val mapped = mapDeviceReportResponse(response)
+            applyServerPopConfig(mapped.popLogsExpected, mapped.features)
+            deviceConfigManager.applyFeatures(mapped.features)
+            syncIntervalConfig.updateInterval(mapped.syncIntervalSeconds)
+            ServerPlayerSignals.from(mapped).mergedCommands()
+                .takeIf { it.isNotEmpty() }
+                ?.let { remoteCommandExecutor.dispatch(it) }
+            mapped
         } catch (e: HttpException) {
             val errorBody = e.response()?.errorBody()?.string()
             Log.e(TAG, "Device report failed: HTTP ${e.code()} $errorBody", e)

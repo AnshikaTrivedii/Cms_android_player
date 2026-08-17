@@ -130,14 +130,13 @@ data class TickerDisplayConfig(
 }
 
 /**
- * Returns all active tickers from sync, sorted by priority (URGENT → NORMAL → LOW).
+ * Active overlay tickers from /sync, preserving server order (URGENT > NORMAL > LOW, then newest).
  * No local device filtering — backend returns only tickers for this device.
  */
 fun List<TickerInfo>.resolveActiveTickers(): List<TickerDisplayConfig> =
     asSequence()
         // Treat a missing isActive (null) as active — backend only sends active tickers.
         .filter { it.isActive != false && !it.text.isNullOrBlank() }
-        .sortedByDescending { TickerPriority.from(it.priority).rank }
         .map { it.toDisplayConfig() }
         .toList()
 

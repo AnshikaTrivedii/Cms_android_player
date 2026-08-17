@@ -48,6 +48,8 @@ fun PlaybackScreen(
     val uiState by viewModel.uiState.collectAsState()
     val isUnpaired by viewModel.isUnpaired.collectAsState()
     val stretchToFit by viewModel.stretchToFit.collectAsState()
+    val overlayTickers by viewModel.overlayTickers.collectAsState()
+    val tickerEnabled by viewModel.tickerEnabled.collectAsState()
     var debugTapCount by remember { mutableIntStateOf(0) }
     val activity = LocalContext.current as? ComponentActivity
 
@@ -88,33 +90,50 @@ fun PlaybackScreen(
                     debugTapCount++
                 }
         )
+        val visibleTickers = if (tickerEnabled) overlayTickers else emptyList()
+        SignageLayeredPlayback(
+            tickers = visibleTickers,
+            modifier = Modifier.fillMaxSize()
+        ) {
         when (val state = uiState) {
-            is PlaybackUiState.Loading -> LoadingState()
+            is PlaybackUiState.Loading -> {
+                if (visibleTickers.isNotEmpty()) IdleContentSlot() else LoadingState()
+            }
             is PlaybackUiState.Downloading -> DownloadingState(state.current, state.total)
-            is PlaybackUiState.WaitingForInitialDownload -> WaitingForInitialDownloadState(
-                reason = state.reason,
-                onRetry = { viewModel.retry() }
-            )
-            is PlaybackUiState.NoContent -> NoContentState()
+            is PlaybackUiState.WaitingForInitialDownload -> {
+                if (visibleTickers.isNotEmpty()) {
+                    IdleContentSlot()
+                } else {
+                    WaitingForInitialDownloadState(
+                        reason = state.reason,
+                        onRetry = { viewModel.retry() }
+                    )
+                }
+            }
+            is PlaybackUiState.NoContent -> {
+                if (visibleTickers.isNotEmpty()) {
+                    IdleContentSlot()
+                } else {
+                    NoContentState()
+                }
+            }
             is PlaybackUiState.PlayingFullScreen -> {
-                SignageLayeredPlayback(tickers = state.tickers) {
-                    androidx.compose.runtime.key(
-                        state.playbackSessionId.ifEmpty { "idx-${state.currentIndex}" }
-                    ) {
-                        AssetPlayback(
-                            asset = state.asset,
-                            localFile = state.localFile,
-                            playbackSessionId = state.playbackSessionId,
-                            videoStopToken = state.videoStopToken,
-                            modifier = Modifier.fillMaxSize(),
-                            onAssetFailed = { viewModel.onAssetFailed(it) },
-                            onPlaybackStarted = { viewModel.onPlaybackStarted(it) },
-                            onVideoEnded = { viewModel.onVideoEnded(it) },
-                            onUrlLoadSuccess = { viewModel.onUrlLoadSuccess(it) },
-                            onUrlLoadFailed = { viewModel.onUrlLoadFailed(it) },
-                            onVideoRendererPulse = { viewModel.onVideoRendererPulse() }
-                        )
-                    }
+                androidx.compose.runtime.key(
+                    state.playbackSessionId.ifEmpty { "idx-${state.currentIndex}" }
+                ) {
+                    AssetPlayback(
+                        asset = state.asset,
+                        localFile = state.localFile,
+                        playbackSessionId = state.playbackSessionId,
+                        videoStopToken = state.videoStopToken,
+                        modifier = Modifier.fillMaxSize(),
+                        onAssetFailed = { viewModel.onAssetFailed(it) },
+                        onPlaybackStarted = { viewModel.onPlaybackStarted(it) },
+                        onVideoEnded = { viewModel.onVideoEnded(it) },
+                        onUrlLoadSuccess = { viewModel.onUrlLoadSuccess(it) },
+                        onUrlLoadFailed = { viewModel.onUrlLoadFailed(it) },
+                        onVideoRendererPulse = { viewModel.onVideoRendererPulse() }
+                    )
                 }
             }
             is PlaybackUiState.Error -> ErrorState(
@@ -122,8 +141,18 @@ fun PlaybackScreen(
                 onRetry = { viewModel.retry() }
             )
         }
+        }
     }
     }
+}
+
+@Composable
+private fun IdleContentSlot() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    )
 }
 
 @Composable
