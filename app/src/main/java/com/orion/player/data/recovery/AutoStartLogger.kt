@@ -163,6 +163,21 @@ object AutoStartLogger {
         Log.i(TAG, "HOME_APP_STATUS defaultHome=$isDefaultHome")
     }
 
+    fun userExitAllowed(target: String) {
+        Log.i(TAG, "USER_EXIT_ALLOWED target=$target — skipping kiosk/watchdog pull-back")
+    }
+
+    fun userExitCleared() {
+        Log.i(TAG, "USER_EXIT_CLEARED")
+    }
+
+    fun userExitLaunchFailed(target: String, error: Throwable) {
+        Log.w(
+            TAG,
+            "USER_EXIT_LAUNCH_FAILED target=$target error=${error.javaClass.simpleName}: ${error.message}"
+        )
+    }
+
     fun launchPrivileges(
         sdk: Int,
         overlayGranted: Boolean,

@@ -116,6 +116,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        AutoStartCoordinator.clearUserExit()
         setupImmersiveMode()
         applyKioskModeIfEnabled()
         applyDisplayOrientation(deviceConfigManager.orientation.value)
@@ -123,6 +124,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        if (AutoStartCoordinator.isUserExitAllowed()) return
         if (securePrefs.kioskModeEnabled && securePrefs.isAuthenticated()) {
             bringPlayerToForeground("kiosk.home")
         }

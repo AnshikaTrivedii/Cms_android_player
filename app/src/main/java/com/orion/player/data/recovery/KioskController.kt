@@ -80,6 +80,21 @@ object KioskController {
         }
     }
 
+    /**
+     * Leave lock-task so another activity (Settings, an app) can open. Only called when
+     * the operator explicitly chose to leave from the Home-escape overlay. [MainActivity]
+     * re-enters lock-task on the next resume.
+     */
+    fun stopLockTaskIfActive(activity: Activity) {
+        if (!isInLockTaskMode(activity)) return
+        try {
+            activity.stopLockTask()
+            lastLoggedState = "stopped"
+        } catch (_: Exception) {
+            // Still attempt to launch the destination; lock-task may block it.
+        }
+    }
+
     fun isInLockTaskMode(context: Context): Boolean {
         val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             ?: return false

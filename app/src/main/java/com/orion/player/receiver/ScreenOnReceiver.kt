@@ -22,6 +22,7 @@ class ScreenOnReceiver : BroadcastReceiver() {
         if (action != Intent.ACTION_SCREEN_ON && action != Intent.ACTION_USER_PRESENT) return
         val appContext = context.applicationContext
         if (AutoStartCoordinator.isPlayerInForeground(appContext)) return
+        if (AutoStartCoordinator.isUserExitAllowed()) return
         PlayerLaunchHelper.launchPlayer(appContext, "screen.on")
     }
 }

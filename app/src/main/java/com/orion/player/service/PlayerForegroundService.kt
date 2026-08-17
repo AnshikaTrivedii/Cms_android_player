@@ -213,6 +213,7 @@ class PlayerForegroundService : Service() {
         )
 
         if (!healthMonitor.isActivityAlive) {
+            if (AutoStartCoordinator.isUserExitAllowed()) return
             recoverActivity()
             return
         }

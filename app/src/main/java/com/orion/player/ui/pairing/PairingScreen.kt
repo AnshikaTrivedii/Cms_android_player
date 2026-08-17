@@ -60,6 +60,7 @@ import com.orion.player.BuildConfig
 import com.orion.player.R
 import com.orion.player.data.recovery.AutoStartCoordinator
 import com.orion.player.data.recovery.KioskController
+import com.orion.player.ui.launcher.HomeEscapeOverlayLayer
 
 /**
  * Pairing screen displayed on first launch.
@@ -104,6 +105,7 @@ fun PairingScreen(
             )
             is PairingUiState.Paired -> { /* Handled above */ }
         }
+        HomeEscapeOverlayLayer()
     }
 }
 

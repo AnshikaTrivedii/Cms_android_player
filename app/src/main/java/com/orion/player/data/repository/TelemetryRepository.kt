@@ -39,6 +39,7 @@ import com.orion.player.data.telemetry.HeartbeatPayloadNormalizer
 import com.orion.player.data.telemetry.HeartbeatTelemetryLogger
 import com.orion.player.util.SessionGuard
 import retrofit2.HttpException
+import dagger.Lazy
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -61,7 +62,7 @@ class TelemetryRepository @Inject constructor(
     private val heartbeatPayloadBuilder: HeartbeatPayloadBuilder,
     private val deviceRegistrationManager: DeviceRegistrationManager,
     private val deviceConfigManager: DeviceConfigManager,
-    private val remoteCommandExecutor: RemoteCommandExecutor
+    private val remoteCommandExecutor: Lazy<RemoteCommandExecutor>
 ) {
     companion object {
         private const val TAG = "OrionTelemetry"
@@ -508,7 +509,7 @@ class TelemetryRepository @Inject constructor(
             syncIntervalConfig.updateInterval(mapped.syncIntervalSeconds)
             ServerPlayerSignals.from(mapped).mergedCommands()
                 .takeIf { it.isNotEmpty() }
-                ?.let { remoteCommandExecutor.dispatch(it) }
+                ?.let { remoteCommandExecutor.get().dispatch(it) }
             mapped
         } catch (e: HttpException) {
             val errorBody = e.response()?.errorBody()?.string()

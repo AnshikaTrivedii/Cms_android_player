@@ -24,4 +24,10 @@
     <string name="home_role_hint">Required so this screen opens after every power-on</string>
     <string name="home_role_active">Orion Player is the Home app — it will open after every power-on</string>
     <string name="home_role_chooser_title">Use Orion Player as Home</string>
+    <string name="home_escape_title">Leave player</string>
+    <string name="home_escape_subtitle">Open Settings or another app. Press Home to return here.</string>
+    <string name="home_escape_settings">System settings</string>
+    <string name="home_escape_all_apps">All apps</string>
+    <string name="home_escape_resume">Resume playback</string>
+    <string name="home_escape_no_apps">No other apps found on this device</string>
 </resources>

@@ -33,6 +33,14 @@ object AutoStartCoordinator {
     private var lastDispatchAtMs = 0L
 
     /**
+     * True after the operator explicitly leaves via the Back overlay (Settings / another
+     * app). Kiosk pull-back, watchdog activity relaunch, and screen-on relaunch must not
+     * fight that until [MainActivity] is in the foreground again.
+     */
+    @Volatile
+    private var userExitAllowed = false
+
+    /**
      * True while [MainActivity] is between onStart and onStop.
      *
      * Deliberately an in-process flag rather than an ActivityManager importance check:
@@ -51,6 +59,10 @@ object AutoStartCoordinator {
     fun launch(context: Context, source: String, attempt: Int = 1): Boolean {
         if (isPlayerInForeground(context)) {
             AutoStartLogger.playerAlreadyRunning(source)
+            return true
+        }
+
+        if (userExitAllowed) {
             return true
         }
 
@@ -105,6 +117,21 @@ object AutoStartCoordinator {
     fun onPlayerHidden() {
         playerVisible = false
     }
+
+    /** Operator opened Settings or another app from the Home-escape overlay. */
+    fun allowUserExit(target: String) {
+        userExitAllowed = true
+        AutoStartLogger.userExitAllowed(target)
+    }
+
+    /** Called from [MainActivity.onResume] once the player is back on screen. */
+    fun clearUserExit() {
+        if (!userExitAllowed) return
+        userExitAllowed = false
+        AutoStartLogger.userExitCleared()
+    }
+
+    fun isUserExitAllowed(): Boolean = userExitAllowed
 
     /** Whether Orion is currently the device's default Home app. */
     fun isDefaultHomeApp(context: Context): Boolean {
