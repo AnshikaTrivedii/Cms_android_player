@@ -3,6 +3,7 @@ package com.orion.player.data.sync
 import com.orion.player.data.playback.PlaylistManifestLogger
 import com.orion.player.data.playback.inPlaylistOrder
 import com.orion.player.data.local.SecurePrefs
+import com.orion.player.data.remote.ActiveScheduleInfo
 import com.orion.player.data.remote.AssetInfo
 import com.orion.player.data.remote.AssetType.hasSyncContentChangedFrom
 import com.orion.player.data.remote.AssetType.isPlayable
@@ -29,6 +30,8 @@ import com.orion.player.data.config.DeviceConfigManager
 import com.orion.player.data.schedule.ActiveScheduleTracker
 import com.orion.player.data.schedule.AssignedPlaylistStore
 import com.orion.player.data.schedule.ScheduleLogger
+import com.orion.player.data.schedule.ScheduleSyncSignal
+import com.orion.player.data.schedule.SchedulingConfig
 import com.orion.player.data.schedule.ScheduleTime
 import com.orion.player.data.ticker.TickerDisplayConfig
 import com.orion.player.data.ticker.TickerLogger
@@ -137,7 +140,18 @@ class ContentSyncCoordinator @Inject constructor(
         get() = revisionEndpointAvailable == false
 
     suspend fun loadCachedSnapshot(): PlaybackSnapshot? {
-        if (shouldPreferAssignedFallback()) {
+        if (!SchedulingConfig.ENABLED) {
+            SchedulingConfig.logDisabled("loadCachedSnapshot")
+            assignedPlaylistStore.load()?.let { fallback ->
+                Log.i(
+                    TAG,
+                    "SCHEDULING_DISABLED restoring assigned playlist from fallback " +
+                        "playlistId=${fallback.playlistInfo?.id}"
+                )
+                restoreOverlayTickers(null)
+                return fallback.copy(tickers = overlayTickers())
+            }
+        } else if (shouldPreferAssignedFallback()) {
             assignedPlaylistStore.load()?.let { fallback ->
                 Log.i(
                     TAG,
@@ -231,11 +245,16 @@ class ContentSyncCoordinator @Inject constructor(
                 layoutId = response.layoutId
             )
 
-            val scheduleSignal = activeScheduleTracker.observe(
-                schedule = response.activeSchedule,
-                source = "sync-revision",
-                serverTime = response.serverTime
-            )
+            val scheduleSignal = if (SchedulingConfig.ENABLED) {
+                activeScheduleTracker.observe(
+                    schedule = response.activeSchedule,
+                    source = "sync-revision",
+                    serverTime = response.serverTime
+                )
+            } else {
+                SchedulingConfig.logDisabled("evaluateRevisionPoll")
+                ScheduleSyncSignal.None
+            }
 
             when {
                 response.syncRequired ->
@@ -262,7 +281,8 @@ class ContentSyncCoordinator @Inject constructor(
                     RevisionPollOutcome(shouldSync = true, reason = "layoutVersion.changed")
                 !response.playlistId.isNullOrBlank() &&
                     !storedPlaylistId.isNullOrBlank() &&
-                    response.playlistId != storedPlaylistId ->
+                    response.playlistId != storedPlaylistId &&
+                    !isDisabledScheduleOverride(response.playlistId, response.activeSchedule) ->
                     RevisionPollOutcome(shouldSync = true, reason = "playlist.reassigned")
                 !response.layoutId.isNullOrBlank() &&
                     !storedLayoutId.isNullOrBlank() &&
@@ -369,13 +389,17 @@ class ContentSyncCoordinator @Inject constructor(
             } ?: return SyncOutcome.Unpaired
 
             detectReassignment(cachedSnapshot, syncResponse)
-            activeScheduleTracker.onSyncResponse(
-                schedule = syncResponse.activeSchedule,
-                syncPlaylistId = syncResponse.playlist?.id,
-                syncPlaylistName = syncResponse.playlist?.name,
-                serverTime = syncResponse.serverTime
-            )
-            rememberAssignedPlaylist(cachedSnapshot)
+            if (SchedulingConfig.ENABLED) {
+                activeScheduleTracker.onSyncResponse(
+                    schedule = syncResponse.activeSchedule,
+                    syncPlaylistId = syncResponse.playlist?.id,
+                    syncPlaylistName = syncResponse.playlist?.name,
+                    serverTime = syncResponse.serverTime
+                )
+                rememberAssignedPlaylist(cachedSnapshot)
+            } else {
+                SchedulingConfig.logDisabled("syncContent")
+            }
             executeCacheCommand(syncResponse.cacheCommand)
             if (ackCommandId.isNullOrBlank()) {
                 ackCommandId = syncResponse.cacheCommand?.id
@@ -426,6 +450,11 @@ class ContentSyncCoordinator @Inject constructor(
                 localVersion = versions.playlistVersion,
                 remoteVersion = syncResponse.playlistVersion
             )
+
+            ignoreScheduledPayloadIfDisabled(
+                syncResponse = syncResponse,
+                current = cachedSnapshot
+            )?.let { return it.withOverlayTickers().withSuccessfulSyncTimestamp() }
 
             outcomeIfStaleScheduledPlaylist(
                 syncPlaylistId = syncResponse.playlist?.id,
@@ -1122,11 +1151,55 @@ class ContentSyncCoordinator @Inject constructor(
     }
 
     private fun shouldPreferAssignedFallback(): Boolean {
+        if (!SchedulingConfig.ENABLED) return assignedPlaylistStore.playlistId() != null
         if (securePrefs.scheduleCompletionPending) return true
         return ScheduleTime.isExpired(
             securePrefs.activeScheduleStart,
             securePrefs.activeScheduleEnd
         )
+    }
+
+    /**
+     * When scheduling is off, a CMS payload whose playlist is the active schedule's
+     * playlist must not replace the manually assigned one.
+     */
+    private suspend fun ignoreScheduledPayloadIfDisabled(
+        syncResponse: SyncResponse,
+        current: PlaybackSnapshot?
+    ): SyncOutcome? {
+        if (SchedulingConfig.ENABLED) return null
+        if (!isDisabledScheduleOverride(syncResponse.playlist?.id, syncResponse.activeSchedule)) {
+            return null
+        }
+        val assigned = assignedPlaylistStore.load()
+        SchedulingConfig.logDisabled(
+            "ignoreScheduledPlaylist:${syncResponse.playlist?.id}->${assigned?.playlistInfo?.id}"
+        )
+        if (assigned != null) {
+            if (current?.playlistInfo?.id == assigned.playlistInfo?.id) {
+                return SyncOutcome.Unchanged
+            }
+            playlistCacheRepository.saveSnapshot(assigned)
+            return SyncOutcome.Updated(
+                snapshot = assigned,
+                structureChanged = true,
+                fromCache = true
+            )
+        }
+        if (current != null) return SyncOutcome.Unchanged
+        return null
+    }
+
+    private fun isDisabledScheduleOverride(
+        incomingPlaylistId: String?,
+        schedule: ActiveScheduleInfo?
+    ): Boolean {
+        if (SchedulingConfig.ENABLED) return false
+        val scheduledId = schedule?.takeIf { it.isPresent }?.playlistId?.takeIf { it.isNotBlank() }
+            ?: return false
+        if (incomingPlaylistId.isNullOrBlank() || incomingPlaylistId != scheduledId) return false
+        val assignedId = assignedPlaylistStore.playlistId()
+        return assignedId != null && assignedId != scheduledId
     }
 
     private fun rememberAssignedPlaylist(current: PlaybackSnapshot?) {

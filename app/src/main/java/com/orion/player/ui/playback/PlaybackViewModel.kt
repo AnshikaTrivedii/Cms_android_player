@@ -34,6 +34,7 @@ import com.orion.player.data.registration.DeviceRegistrationManager
 import com.orion.player.data.repository.TelemetryRepository
 import com.orion.player.data.schedule.ActiveScheduleTracker
 import com.orion.player.data.schedule.AssignedPlaylistStore
+import com.orion.player.data.schedule.SchedulingConfig
 import com.orion.player.data.schedule.ScheduleExpiryController
 import com.orion.player.data.schedule.ScheduleLogger
 import com.orion.player.data.telemetry.DeviceHeartbeatScheduler
@@ -163,7 +164,11 @@ class PlaybackViewModel @Inject constructor(
         contentSyncCoordinator.registerRetrySyncHandler {
             requestContentSync(force = true, reason = "sync.retry")
         }
-        startScheduleExpiryController()
+        if (SchedulingConfig.ENABLED) {
+            startScheduleExpiryController()
+        } else {
+            SchedulingConfig.logDisabled("PlaybackViewModel.init")
+        }
         initialSyncCoordinator.registerSyncHandler { reason, commandId ->
             executeForcedSync(reason, commandId)
         }
@@ -362,6 +367,11 @@ class PlaybackViewModel @Inject constructor(
             networkMonitor.observeOnline().collect { online ->
                 if (online) {
                     telemetryRepository.flushAll()
+                    if (!SchedulingConfig.ENABLED) {
+                        SchedulingConfig.logDisabled("network.reconnected")
+                        requestContentSync(force = true, reason = "network.reconnected")
+                        return@collect
+                    }
                     val pending = activeScheduleTracker.reconcileAfterReconnect()
                     val reason = if (pending.shouldSync) {
                         pending.reason ?: "network.reconnected"
@@ -383,6 +393,10 @@ class PlaybackViewModel @Inject constructor(
      * synchronized server time and immediately updates the playback source.
      */
     private fun startScheduleExpiryController() {
+        if (!SchedulingConfig.ENABLED) {
+            SchedulingConfig.logDisabled("startScheduleExpiryController")
+            return
+        }
         scheduleExpiryController.setOnExpired {
             viewModelScope.launch {
                 leaveExpiredSchedule(reason = "SCHEDULE_EXPIRED")
@@ -396,6 +410,10 @@ class PlaybackViewModel @Inject constructor(
      * with CMS. Does not restart the app, stop the service, unpair, or delete assets.
      */
     private fun leaveExpiredSchedule(reason: String) {
+        if (!SchedulingConfig.ENABLED) {
+            SchedulingConfig.logDisabled("leaveExpiredSchedule")
+            return
+        }
         viewModelScope.launch {
             val fromPlaylist = playlistInfo?.name ?: playlistInfo?.id
 
@@ -1243,6 +1261,15 @@ fun onUrlLoadFailed(assetName: String) {
 
     private fun handleHeartbeatResponse(response: HeartbeatResponse) {
         contentSyncScheduler.updateInterval(response.syncIntervalSeconds)
+        if (!SchedulingConfig.ENABLED) {
+            SchedulingConfig.logDisabled("heartbeat")
+            if (response.syncRequired == true) {
+                requestContentSync(force = true, reason = "heartbeat.syncRequired")
+            } else if (contentSyncCoordinator.consumeRevisionIfChanged(response.contentRevision)) {
+                requestContentSync(force = true, reason = "heartbeat.revision")
+            }
+            return
+        }
         val scheduleSignal = activeScheduleTracker.observe(
             schedule = response.activeSchedule,
             source = "heartbeat",

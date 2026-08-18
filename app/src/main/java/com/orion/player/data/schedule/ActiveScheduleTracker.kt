@@ -43,6 +43,24 @@ class ActiveScheduleTracker @Inject constructor(
 
     val activeScheduleId: String? get() = securePrefs.activeScheduleId
 
+    init {
+        if (!SchedulingConfig.ENABLED) {
+            SchedulingConfig.logDisabled("ActiveScheduleTracker.init")
+            inFlightSchedule = null
+            expiryController.cancel()
+            clearCommittedSchedule(keepPlaylistName = true)
+            securePrefs.expiredScheduleId = null
+            securePrefs.expiredSchedulePlaylistId = null
+            securePrefs.scheduleCompletionPending = false
+        }
+    }
+
+    private fun disabled(where: String): Boolean {
+        if (SchedulingConfig.ENABLED) return false
+        SchedulingConfig.logDisabled(where)
+        return true
+    }
+
     /**
      * Evaluate a lightweight payload (revision poll / heartbeat).
      * Returns whether the schedule state requires a full sync.
@@ -52,6 +70,7 @@ class ActiveScheduleTracker @Inject constructor(
         source: String,
         serverTime: String? = null
     ): ScheduleSyncSignal {
+        if (disabled("observe.$source")) return ScheduleSyncSignal.None
         serverTime?.let { ScheduleClock.noteServerTime(it) }
         val live = liveSchedule(schedule, source)
         logReceived(source, live, incomingRaw = schedule)
@@ -107,6 +126,7 @@ class ActiveScheduleTracker @Inject constructor(
         syncPlaylistName: String?,
         serverTime: String? = null
     ) {
+        if (disabled("onSyncResponse")) return
         serverTime?.let { ScheduleClock.noteServerTime(it) }
         val incoming = liveSchedule(schedule, "sync")
         logReceived("sync", incoming, incomingRaw = schedule)
@@ -142,6 +162,7 @@ class ActiveScheduleTracker @Inject constructor(
     }
 
     fun onAssetsDownloaded(downloaded: Int, playlistAssetCount: Int) {
+        if (disabled("onAssetsDownloaded")) return
         if (inFlightSchedule == null && securePrefs.activeScheduleId == null) return
         ScheduleLogger.assetsDownloaded(
             scheduleId = inFlightSchedule?.scheduleId,
@@ -151,6 +172,7 @@ class ActiveScheduleTracker @Inject constructor(
     }
 
     fun onSwitchFailed(reason: String) {
+        if (disabled("onSwitchFailed")) return
         if (inFlightSchedule == null && securePrefs.activeScheduleId == null) return
         ScheduleLogger.switchFailed(inFlightSchedule?.scheduleId, reason)
     }
@@ -161,6 +183,11 @@ class ActiveScheduleTracker @Inject constructor(
      * "Previous Playlist" in the next switch log.
      */
     fun onPlaylistActivated(playlistId: String?, playlistName: String?) {
+        if (disabled("onPlaylistActivated")) {
+            val name = playlistName?.takeIf { it.isNotBlank() }
+            if (name != null) securePrefs.activePlaylistName = name
+            return
+        }
         val activePlaylistId = playlistId?.takeIf { it.isNotBlank() } ?: return
         val schedule = inFlightSchedule?.takeIf { liveSchedule(it, "activate") != null }
         val scheduleId = schedule?.scheduleId?.takeIf { it.isNotBlank() }
@@ -229,6 +256,12 @@ class ActiveScheduleTracker @Inject constructor(
      * active, but cached content keeps playing until CMS sync reconciles.
      */
     fun onCachedPlaylistRestored(playlistName: String?) {
+        if (disabled("onCachedPlaylistRestored")) {
+            if (!playlistName.isNullOrBlank()) {
+                securePrefs.activePlaylistName = playlistName
+            }
+            return
+        }
         if (!playlistName.isNullOrBlank()) {
             securePrefs.activePlaylistName = playlistName
         }
@@ -247,6 +280,7 @@ class ActiveScheduleTracker @Inject constructor(
      * would otherwise leave it ACTIVE. Playback must leave this playlist.
      */
     fun onExpiryTimerFired(): Boolean {
+        if (disabled("onExpiryTimerFired")) return false
         val scheduleId = securePrefs.activeScheduleId ?: inFlightSchedule?.scheduleId
         if (scheduleId.isNullOrBlank() && securePrefs.scheduleCompletionPending) return true
         if (scheduleId.isNullOrBlank()) return false
@@ -265,6 +299,7 @@ class ActiveScheduleTracker @Inject constructor(
      * for the next schedule or the assigned playlist. Cached content is not cleared.
      */
     fun consumeLocalExpiry(source: String = "window"): Boolean {
+        if (disabled("consumeLocalExpiry.$source")) return false
         val scheduleId = securePrefs.activeScheduleId ?: inFlightSchedule?.scheduleId
         if (scheduleId.isNullOrBlank() && !securePrefs.scheduleCompletionPending) return false
 
@@ -290,6 +325,7 @@ class ActiveScheduleTracker @Inject constructor(
 
     /** After network returns, force a sync if a local completion has not been confirmed. */
     fun reconcileAfterReconnect(): ScheduleSyncSignal {
+        if (disabled("reconcileAfterReconnect")) return ScheduleSyncSignal.None
         if (consumeLocalExpiry(source = "reconnect")) {
             return ScheduleSyncSignal(shouldSync = true, reason = REASON_ENDED)
         }
@@ -304,6 +340,7 @@ class ActiveScheduleTracker @Inject constructor(
     }
 
     fun consumeDueWindow(source: String = "window"): Boolean {
+        if (disabled("consumeDueWindow.$source")) return false
         maybeLogExpiring()
         if (consumeLocalExpiry(source)) return true
         val start = pendingStartRaw ?: return false
@@ -344,6 +381,7 @@ class ActiveScheduleTracker @Inject constructor(
      * and has not named a new live schedule.
      */
     fun isStaleScheduledPlaylist(syncPlaylistId: String?): Boolean {
+        if (disabled("isStaleScheduledPlaylist")) return false
         if (inFlightSchedule != null) return false
         val expiredPlaylistId = securePrefs.expiredSchedulePlaylistId ?: return false
         if (syncPlaylistId.isNullOrBlank() || syncPlaylistId != expiredPlaylistId) return false
@@ -352,6 +390,7 @@ class ActiveScheduleTracker @Inject constructor(
     }
 
     fun shouldPreserveCurrentAsAssigned(currentPlaylistId: String?): Boolean {
+        if (disabled("shouldPreserveCurrentAsAssigned")) return false
         val currentId = currentPlaylistId?.takeIf { it.isNotBlank() } ?: return false
         val scheduledId = inFlightSchedule?.playlistId?.takeIf { it.isNotBlank() }
         if (scheduledId != null) return currentId != scheduledId
@@ -366,6 +405,7 @@ class ActiveScheduleTracker @Inject constructor(
         durationSeconds: Int,
         status: String
     ) {
+        if (disabled("logPopEvent")) return
         val scheduleId = inFlightSchedule?.scheduleId ?: securePrefs.activeScheduleId
         if (scheduleId.isNullOrBlank()) return
         ScheduleLogger.popEvent(

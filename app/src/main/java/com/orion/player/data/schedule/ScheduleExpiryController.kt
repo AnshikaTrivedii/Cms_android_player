@@ -41,6 +41,11 @@ class ScheduleExpiryController @Inject constructor() {
             return
         }
 
+        if (!SchedulingConfig.ENABLED) {
+            SchedulingConfig.logDisabled("ScheduleExpiryController.arm")
+            return
+        }
+
         cancelLocked()
         armedScheduleId = id
         armedEndRaw = end
