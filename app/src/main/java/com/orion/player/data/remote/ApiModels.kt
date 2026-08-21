@@ -138,6 +138,8 @@ data class HeartbeatResponse(
     val defaultVideoDuration: Int? = null,
     val activeSchedule: ActiveScheduleInfo? = null,
     val serverTime: String? = null,
+    @SerializedName("serverNow") val serverNow: String? = null,
+    @SerializedName("nextContentChangeAt") val nextContentChangeAt: String? = null,
     @SerializedName("cacheCommand") val cacheCommand: CacheCommandInfo? = null
 )
 
@@ -172,8 +174,8 @@ data class SyncRevisionResponse(
     val playlistId: String? = null,
     val layoutId: String? = null,
     val initialSyncPending: Boolean = false,
-    val revisionPollIntervalSeconds: Int = 5,
-    val syncIntervalSeconds: Int = 120,
+    val revisionPollIntervalSeconds: Int = 0,
+    val syncIntervalSeconds: Int = 600,
     val stretchToFit: Boolean? = null,
     val orientation: String? = null,
     val display: DisplayConfig? = null,
@@ -184,7 +186,9 @@ data class SyncRevisionResponse(
     val defaultVideoDuration: Int? = null,
     val activeSchedule: ActiveScheduleInfo? = null,
     val configVersion: Int? = null,
-    val serverTime: String? = null
+    val serverTime: String? = null,
+    @SerializedName("serverNow") val serverNow: String? = null,
+    @SerializedName("nextContentChangeAt") val nextContentChangeAt: String? = null
 )
 
 // ── Sync ───────────────────────────────────────────────────
@@ -222,7 +226,9 @@ data class SyncResponse(
     @SerializedName("defaultUrlDuration") val defaultUrlDuration: Int? = null,
     @SerializedName("defaultVideoDuration") val defaultVideoDuration: Int? = null,
     @SerializedName("activeSchedule") val activeSchedule: ActiveScheduleInfo? = null,
-    @SerializedName("serverTime") val serverTime: String? = null
+    @SerializedName("serverTime") val serverTime: String? = null,
+    @SerializedName("serverNow") val serverNow: String? = null,
+    @SerializedName("nextContentChangeAt") val nextContentChangeAt: String? = null
 ) {
     val unchanged: Boolean get() = unchangedRaw ?: false
     fun resolvedAssets(): List<AssetInfo> = assets.orEmpty().filter { it.id.isNotBlank() }
@@ -523,6 +529,7 @@ data class DeviceReportResponse(
     val configVersion: Int? = null,
     val popLogsExpected: Boolean? = null,
     val syncIntervalSeconds: Int? = null,
+    val revisionPollIntervalSeconds: Int? = null,
     val initialSyncPending: Boolean? = null,
     val initialSyncTimeoutSeconds: Int? = null,
     val features: PlayerFeatures? = null,

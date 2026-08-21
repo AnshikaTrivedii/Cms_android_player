@@ -29,6 +29,7 @@ import com.orion.player.data.registration.DeviceRegistrationStatusParser
 import com.orion.player.data.config.DeviceConfigManager
 import com.orion.player.data.schedule.ActiveScheduleTracker
 import com.orion.player.data.schedule.AssignedPlaylistStore
+import com.orion.player.data.schedule.ScheduleExpiryController
 import com.orion.player.data.schedule.ScheduleLogger
 import com.orion.player.data.schedule.ScheduleSyncSignal
 import com.orion.player.data.schedule.SchedulingConfig
@@ -111,7 +112,8 @@ class ContentSyncCoordinator @Inject constructor(
     private val deviceConfigManager: DeviceConfigManager,
     private val activeScheduleTracker: ActiveScheduleTracker,
     private val assignedPlaylistStore: AssignedPlaylistStore,
-    private val tickerStateStore: TickerStateStore
+    private val tickerStateStore: TickerStateStore,
+    private val scheduleExpiryController: ScheduleExpiryController
 ) {
     companion object {
         private const val TAG = "OrionSync"
@@ -223,6 +225,7 @@ class ContentSyncCoordinator @Inject constructor(
             revisionEndpointAvailable = true
             revisionPollIntervalConfig.updateInterval(response.revisionPollIntervalSeconds)
             syncIntervalConfig.updateInterval(response.syncIntervalSeconds)
+            scheduleExpiryController.armNextContentChange(response.nextContentChangeAt)
 
             val localVersions = playlistCacheRepository.getSyncVersions()
             Log.i(
@@ -443,6 +446,7 @@ class ContentSyncCoordinator @Inject constructor(
             deviceConfigManager.applyFeatures(syncResponse.features)
             syncIntervalConfig.updateInterval(syncResponse.syncIntervalSeconds)
             revisionPollIntervalConfig.updateInterval(syncResponse.revisionPollIntervalSeconds)
+            scheduleExpiryController.armNextContentChange(syncResponse.nextContentChangeAt)
             initialSyncCoordinator.handleSyncResponse(syncResponse)
             applyTickersFromSync(syncResponse)
 

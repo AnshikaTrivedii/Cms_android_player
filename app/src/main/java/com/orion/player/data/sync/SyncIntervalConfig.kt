@@ -16,8 +16,14 @@ import javax.inject.Singleton
 class SyncIntervalConfig @Inject constructor(
     private val securePrefs: SecurePrefs
 ) {
-    private val _intervalSeconds = MutableStateFlow(securePrefs.syncIntervalSeconds)
+    private val _intervalSeconds = MutableStateFlow(initialInterval())
     val intervalSeconds: StateFlow<Int> = _intervalSeconds.asStateFlow()
+
+    init {
+        if (securePrefs.syncIntervalSeconds != _intervalSeconds.value) {
+            securePrefs.syncIntervalSeconds = _intervalSeconds.value
+        }
+    }
 
     fun intervalMs(): Long = _intervalSeconds.value.toLong() * 1000L
 
@@ -25,7 +31,8 @@ class SyncIntervalConfig @Inject constructor(
      * @return true when the effective interval changed.
      */
     fun updateInterval(seconds: Int?): Boolean {
-        val clamped = (seconds ?: DEFAULT_SYNC_INTERVAL_SECONDS).coerceIn(MIN_SECONDS, MAX_SECONDS)
+        if (seconds == null) return false
+        val clamped = seconds.coerceIn(MIN_SECONDS, MAX_SECONDS)
         if (clamped == _intervalSeconds.value) return false
         securePrefs.syncIntervalSeconds = clamped
         _intervalSeconds.value = clamped
@@ -33,10 +40,17 @@ class SyncIntervalConfig @Inject constructor(
         return true
     }
 
+    private fun initialInterval(): Int {
+        val stored = securePrefs.syncIntervalSeconds
+        if (stored == LEGACY_DEFAULT_SECONDS) return DEFAULT_SYNC_INTERVAL_SECONDS
+        return stored.coerceIn(MIN_SECONDS, MAX_SECONDS)
+    }
+
     companion object {
         private const val TAG = "OrionSync"
-        const val DEFAULT_SYNC_INTERVAL_SECONDS = 120
+        const val DEFAULT_SYNC_INTERVAL_SECONDS = 600
         const val MIN_SECONDS = 30
         const val MAX_SECONDS = 3600
+        private const val LEGACY_DEFAULT_SECONDS = 120
     }
 }

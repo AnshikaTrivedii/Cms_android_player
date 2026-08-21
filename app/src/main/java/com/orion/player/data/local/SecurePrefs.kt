@@ -219,12 +219,12 @@ class SecurePrefs @Inject constructor(
             video = defaultVideoDurationSeconds
         )
 
-    /** Seconds between full /player/sync polls (server-configurable, default 120). */
+    /** Seconds between full /player/sync polls (server-configurable, default 600). */
     var syncIntervalSeconds: Int
         get() = prefs.getInt(KEY_SYNC_INTERVAL_SECONDS, SyncConfig.DEFAULT_SYNC_INTERVAL_SECONDS)
         set(value) = prefs.edit().putInt(KEY_SYNC_INTERVAL_SECONDS, value).apply()
 
-    /** Seconds between lightweight /player/sync-revision polls (default 5s). */
+    /** Seconds between /player/sync-revision polls. 0 = disabled (heartbeat delivers FORCE_SYNC). */
     var revisionPollIntervalSeconds: Int
         get() = prefs.getInt(KEY_REVISION_POLL_INTERVAL_SECONDS, SyncConfig.DEFAULT_REVISION_POLL_INTERVAL_SECONDS)
         set(value) = prefs.edit().putInt(KEY_REVISION_POLL_INTERVAL_SECONDS, value).apply()

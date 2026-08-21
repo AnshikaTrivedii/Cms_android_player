@@ -74,6 +74,7 @@ data class ServerPlayerSignals(
         fun from(response: DeviceReportResponse): ServerPlayerSignals =
             ServerPlayerSignals(
                 syncIntervalSeconds = response.syncIntervalSeconds,
+                revisionPollIntervalSeconds = response.revisionPollIntervalSeconds,
                 initialSyncPending = response.initialSyncPending,
                 initialSyncTimeoutSeconds = response.initialSyncTimeoutSeconds,
                 popLogsExpected = response.popLogsExpected,

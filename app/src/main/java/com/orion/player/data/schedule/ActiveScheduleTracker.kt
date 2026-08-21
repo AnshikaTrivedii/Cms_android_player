@@ -445,6 +445,7 @@ class ActiveScheduleTracker @Inject constructor(
         lastExpiringLogAtMs = 0L
         pendingStartRaw = null
         expiryController.cancel()
+        expiryController.cancelNextContentChange()
         clearCommittedSchedule(keepPlaylistName = false)
         securePrefs.activePlaylistName = null
         securePrefs.expiredScheduleId = null

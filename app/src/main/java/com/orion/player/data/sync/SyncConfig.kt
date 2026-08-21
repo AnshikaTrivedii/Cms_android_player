@@ -1,22 +1,23 @@
 package com.orion.player.data.sync
 
 /**
- * Intervals for near-real-time content sync.
- * SSE provides instant updates; revision polling and full-sync fallback cover offline/SSE gaps.
+ * Intervals for content sync.
+ * Heartbeat delivers FORCE_SYNC; revision polling is off by default.
+ * Full-sync fallback covers missed commands.
  */
 object SyncConfig {
-    /** Lightweight revision check — small payload, safe to poll frequently. */
-    const val REVISION_POLL_INTERVAL_MS = 5_000L
+    /** Disabled by default — heartbeat is the primary change detector. */
+    const val REVISION_POLL_INTERVAL_MS = 0L
 
-    /** Full sync fallback when revision endpoint and SSE are unavailable. */
-    @Deprecated("Use SyncIntervalConfig — server-driven, default 120s")
-    const val FULL_SYNC_POLL_INTERVAL_MS = 120_000L
+    /** Full sync fallback when heartbeat FORCE_SYNC is missed. */
+    @Deprecated("Use SyncIntervalConfig — server-driven, default 600s")
+    const val FULL_SYNC_POLL_INTERVAL_MS = 600_000L
 
     /** Default full sync interval when the server omits syncIntervalSeconds. */
-    const val DEFAULT_SYNC_INTERVAL_SECONDS = 120
+    const val DEFAULT_SYNC_INTERVAL_SECONDS = 600
 
-    /** Default revision poll interval when the server omits revisionPollIntervalSeconds. */
-    const val DEFAULT_REVISION_POLL_INTERVAL_SECONDS = 5
+    /** Default revision poll interval when the server omits revisionPollIntervalSeconds. 0 = disabled. */
+    const val DEFAULT_REVISION_POLL_INTERVAL_SECONDS = 0
 
     /** Minimum gap between full sync executions (debounce burst triggers). */
     const val MIN_SYNC_DEBOUNCE_MS = 2_000L

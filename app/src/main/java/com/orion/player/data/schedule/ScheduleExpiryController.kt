@@ -22,9 +22,44 @@ class ScheduleExpiryController @Inject constructor() {
     private var armedScheduleId: String? = null
     private var armedEndRaw: String? = null
     private var onExpired: (() -> Unit)? = null
+    private var contentChangeJob: Job? = null
+    private var armedContentChangeAt: String? = null
+    private var onNextContentChange: (() -> Unit)? = null
 
     fun setOnExpired(listener: () -> Unit) {
         onExpired = listener
+    }
+
+    fun setOnNextContentChange(listener: () -> Unit) {
+        onNextContentChange = listener
+    }
+
+    /**
+     * Arm a one-shot wake at CMS [nextContentChangeAt] so schedule start/end
+     * does not wait for the next heartbeat. Null cancels the timer.
+     */
+    @Synchronized
+    fun armNextContentChange(atIso: String?) {
+        val at = atIso?.takeIf { it.isNotBlank() }
+        if (at == null) {
+            cancelNextContentChangeLocked()
+            return
+        }
+        if (at == armedContentChangeAt && contentChangeJob?.isActive == true) {
+            return
+        }
+        cancelNextContentChangeLocked()
+        armedContentChangeAt = at
+        val remaining = (ScheduleTime.millisUntil(at) ?: 0L).coerceAtLeast(0L)
+        ScheduleLogger.clockSnapshot(
+            startRaw = at,
+            endRaw = at,
+            calculatedStatus = "NEXT_CONTENT_CHANGE"
+        )
+        contentChangeJob = scope.launch {
+            if (remaining > 0L) delay(remaining)
+            onNextContentChange?.invoke()
+        }
     }
 
     @Synchronized
@@ -84,10 +119,21 @@ class ScheduleExpiryController @Inject constructor() {
         cancelLocked()
     }
 
+    @Synchronized
+    fun cancelNextContentChange() {
+        cancelNextContentChangeLocked()
+    }
+
     private fun cancelLocked() {
         job?.cancel()
         job = null
         armedScheduleId = null
         armedEndRaw = null
+    }
+
+    private fun cancelNextContentChangeLocked() {
+        contentChangeJob?.cancel()
+        contentChangeJob = null
+        armedContentChangeAt = null
     }
 }

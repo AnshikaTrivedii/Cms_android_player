@@ -1,12 +1,12 @@
 package com.orion.player.data.sync
 
 import android.util.Log
-import com.orion.player.data.repository.CacheReportRepository
 import com.orion.player.util.SessionGuard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -14,9 +14,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Loop A: lightweight GET /player/sync-revision every revisionPollIntervalSeconds (default 5s).
- * Primary change-detection path — triggers full sync immediately when revision or assignment changes.
- * Compares the full contentRevision string (including the :tk… ticker suffix).
+ * Optional Loop A: GET /player/sync-revision when revisionPollIntervalSeconds > 0.
+ * Default is 0 (disabled). Heartbeat FORCE_SYNC / syncRequired is the primary path.
  */
 @Singleton
 class RevisionPollScheduler @Inject constructor(
@@ -60,6 +59,11 @@ class RevisionPollScheduler @Inject constructor(
     }
 
     private suspend fun pollLoop() {
+        val seconds = revisionPollIntervalConfig.intervalSeconds.value
+        if (seconds <= 0) {
+            Log.i(TAG, "Revision poll disabled (interval=0); heartbeat delivers FORCE_SYNC")
+            awaitCancellation()
+        }
         while (true) {
             delay(revisionPollIntervalConfig.intervalMs())
             if (!sessionGuard.isPairedWithToken()) continue

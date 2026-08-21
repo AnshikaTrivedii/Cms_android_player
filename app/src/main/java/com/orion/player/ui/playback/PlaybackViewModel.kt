@@ -167,6 +167,11 @@ class PlaybackViewModel @Inject constructor(
         contentSyncCoordinator.registerRetrySyncHandler {
             requestContentSync(force = true, reason = "sync.retry")
         }
+        scheduleExpiryController.setOnNextContentChange {
+            viewModelScope.launch {
+                requestContentSync(force = true, reason = "nextContentChangeAt")
+            }
+        }
         if (SchedulingConfig.ENABLED) {
             startScheduleExpiryController()
         } else {
@@ -1264,6 +1269,8 @@ fun onUrlLoadFailed(assetName: String) {
 
     private fun handleHeartbeatResponse(response: HeartbeatResponse) {
         contentSyncScheduler.updateInterval(response.syncIntervalSeconds)
+        scheduleExpiryController.armNextContentChange(response.nextContentChangeAt)
+        val serverClock = response.serverNow ?: response.serverTime
         if (!SchedulingConfig.ENABLED) {
             SchedulingConfig.logDisabled("heartbeat")
             if (response.syncRequired == true) {
@@ -1276,7 +1283,7 @@ fun onUrlLoadFailed(assetName: String) {
         val scheduleSignal = activeScheduleTracker.observe(
             schedule = response.activeSchedule,
             source = "heartbeat",
-            serverTime = response.serverTime
+            serverTime = serverClock
         )
         val expired = activeScheduleTracker.consumeLocalExpiry(source = "heartbeat")
         if (expired || scheduleSignal.reason == ActiveScheduleTracker.REASON_ENDED) {
