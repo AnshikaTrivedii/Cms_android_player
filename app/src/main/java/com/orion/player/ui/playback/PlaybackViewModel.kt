@@ -133,6 +133,9 @@ class PlaybackViewModel @Inject constructor(
     val overlayTickers: StateFlow<List<TickerDisplayConfig>> = tickerStateStore.tickers
     val tickerEnabled: StateFlow<Boolean> = deviceConfigManager.tickerEnabled
 
+    /** Validated internet. Independent of sync/API success. */
+    val isOnline: StateFlow<Boolean> = networkMonitor.online
+
     init {
         healthMonitor.recordStartupInit()
         healthMonitor.registerSlotLoopAliveChecker { advanceJob?.isActive == true }

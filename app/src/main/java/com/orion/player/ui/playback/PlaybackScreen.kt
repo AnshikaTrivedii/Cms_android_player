@@ -51,6 +51,7 @@ fun PlaybackScreen(
     val stretchToFit by viewModel.stretchToFit.collectAsState()
     val overlayTickers by viewModel.overlayTickers.collectAsState()
     val tickerEnabled by viewModel.tickerEnabled.collectAsState()
+    val isOnline by viewModel.isOnline.collectAsState()
     var debugTapCount by remember { mutableIntStateOf(0) }
     val activity = LocalContext.current as? ComponentActivity
 
@@ -63,6 +64,15 @@ fun PlaybackScreen(
 
     LaunchedEffect(isUnpaired) {
         if (isUnpaired) onUnpaired()
+    }
+
+    LaunchedEffect(isOnline) {
+        android.util.Log.i(
+            "OrionNetwork",
+            "OFFLINE_DEBUG: networkState=${if (isOnline) "ONLINE" else "OFFLINE"} " +
+                "uiOfflineState=${!isOnline} " +
+                "indicatorVisibility=${if (!isOnline) "VISIBLE" else "GONE"}"
+        )
     }
 
     LaunchedEffect(debugTapCount) {
@@ -144,6 +154,7 @@ fun PlaybackScreen(
         }
         }
         HomeEscapeOverlayLayer()
+        OfflineStatusBadge(visible = !isOnline)
     }
     }
 }
