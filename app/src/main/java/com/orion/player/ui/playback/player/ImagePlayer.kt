@@ -36,6 +36,8 @@ import java.io.File
 fun ImagePlayer(
     file: File? = null,
     url: String? = null,
+    onReady: () -> Unit = {},
+    onFailed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -86,7 +88,9 @@ fun ImagePlayer(
             onSuccess = { state ->
                 imageWidth = state.result.drawable.intrinsicWidth
                 imageHeight = state.result.drawable.intrinsicHeight
-            }
+                onReady()
+            },
+            onError = { onFailed() }
         )
     }
 }

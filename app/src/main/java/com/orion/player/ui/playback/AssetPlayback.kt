@@ -50,8 +50,18 @@ fun AssetPlayback(
         AssetType.IMAGE -> {
             val remoteUrl = asset.remoteSourceUrl()
             when {
-                localFile != null -> ImagePlayer(file = localFile, modifier = modifier)
-                !remoteUrl.isNullOrBlank() -> ImagePlayer(url = remoteUrl, modifier = modifier)
+                localFile != null -> ImagePlayer(
+                    file = localFile,
+                    onReady = { onPlaybackStarted(asset.name) },
+                    onFailed = { onAssetFailed(asset.name) },
+                    modifier = modifier
+                )
+                !remoteUrl.isNullOrBlank() -> ImagePlayer(
+                    url = remoteUrl,
+                    onReady = { onPlaybackStarted(asset.name) },
+                    onFailed = { onAssetFailed(asset.name) },
+                    modifier = modifier
+                )
                 else -> UnavailableAssetPlaceholder(modifier)
             }
         }

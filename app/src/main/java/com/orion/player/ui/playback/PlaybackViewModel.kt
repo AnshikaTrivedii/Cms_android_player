@@ -25,6 +25,7 @@ import com.orion.player.data.remote.AssetType
 import com.orion.player.data.remote.AssetType.deferPopStartUntilReady
 import com.orion.player.data.remote.AssetType.isPlayable
 import com.orion.player.data.remote.AssetType.normalizedType
+import com.orion.player.data.remote.AssetType.playlistManifestChangedFrom
 import com.orion.player.data.enterprise.DeviceLogCollector
 import com.orion.player.data.enterprise.RemoteCommandExecutor
 import com.orion.player.data.remote.HeartbeatResponse
@@ -123,6 +124,18 @@ class PlaybackViewModel @Inject constructor(
     private var videoEndedDeferred: CompletableDeferred<Unit>? = null
 
     private var videoStopToken = 0L
+    private var visiblePaneId = 0
+    private var visiblePrepId = 0L
+    private var visibleKey: String? = null
+    private var hiddenPrepId = -1L
+    private var hiddenReady = false
+    private var hiddenFailed = false
+    private var publishedHiddenKey: String? = null
+    private var gaplessEntry = false
+    private var gaplessStart: Instant? = null
+    private var gaplessFailed = false
+    private var visibleForceError = false
+    private var prepSequence = 0L
 
     private var backgroundServicesStarted = false
 
@@ -707,15 +720,29 @@ class PlaybackViewModel @Inject constructor(
         )
 
         if (wasDisplaying) {
-            notifyPlaylistLive(fromSync)
-            if (currentRemoved) {
+            val playlistChanged = currentRemoved ||
+                previousVersion != normalized.playlistVersion ||
+                previousAssets.playlistManifestChangedFrom(newAssets)
+            if (playlistChanged) {
+                dropHiddenPrep()
+                visiblePrepId = 0L
+                visibleKey = null
+                visiblePaneId = 0
+                visibleForceError = false
                 activePopSession?.takeIf { !it.finalized }?.let { session ->
-                    finalizePopSession("FAILED", session)
+                    if (currentRemoved) {
+                        finalizePopSession("FAILED", session)
+                    } else {
+                        val elapsed = elapsedSecondsSince(session.effectiveStartTime(), Instant.now())
+                        finalizePopSession("VERIFIED", session, actualElapsedSeconds = elapsed)
+                    }
                 }
                 emitFullScreen()
+                notifyPlaylistLive(fromSync)
                 startSlotLoop(resetGeneration = true)
                 return
             }
+            notifyPlaylistLive(fromSync)
             val playing = _uiState.value
             if (playing is PlaybackUiState.PlayingFullScreen &&
                 playing.asset.id == playlistAssets.getOrNull(resolvedIndex)?.id
@@ -799,6 +826,13 @@ class PlaybackViewModel @Inject constructor(
         if (resetGeneration) {
             slotGeneration++
             advanceJob?.cancel()
+            dropHiddenPrep()
+            visiblePrepId = 0L
+            visibleKey = null
+            visibleForceError = false
+            gaplessEntry = false
+            gaplessStart = null
+            gaplessFailed = false
         }
         scheduleCurrentAsset()
     }
@@ -829,16 +863,28 @@ class PlaybackViewModel @Inject constructor(
         contentReadyDeferred = CompletableDeferred()
         videoEndedDeferred = CompletableDeferred()
 
-        if (!asset.isPlayable(localFiles)) {
-            PlaybackSlotLogger.logSlotSkipped(index, asset, "not playable locally")
-            beginPopSession(asset, playlistName)
-            finalizePopSession("FAILED")
-            advanceToNextAsset()
+        val failedEntry = gaplessFailed
+        beginPopSession(asset, playlistName)
+        val mySession = activePopSession?.sessionId
+        if (abortSlotForGeneration(generation, played = false, sessionId = mySession)) return
+
+        if (!asset.isPlayable(localFiles) || failedEntry || visibleForceError) {
+            PlaybackSlotLogger.logSlotSkipped(index, asset, "not playable")
+            val hold = configuredMs.coerceAtLeast(1_000L)
+            waitForConfiguredDuration(
+                index,
+                activePopSession?.effectiveStartTime() ?: Instant.now(),
+                hold
+            )
+            if (abortSlotForGeneration(generation, played = true, result = "FAILED", sessionId = mySession)) {
+                return
+            }
+            val end = Instant.now()
+            finalizePopSession("FAILED", explicitEnd = end)
+            handoffAfterSlot(generation, index, early = false, boundary = end, wasReadyAtDeadline = hiddenReady)
             return
         }
 
-        beginPopSession(asset, playlistName)
-        if (abortSlotForGeneration(generation, played = false)) return
 
         val sessionId = activePopSession?.sessionId.orEmpty()
         PlaybackSlotLogger.logSlotStarted(index, asset, configuredMs, sessionId)
@@ -864,35 +910,50 @@ class PlaybackViewModel @Inject constructor(
             )
         }
 
-        if (abortSlotForGeneration(generation, played = true, result = result, slotStart = slotStart)) return
+        if (abortSlotForGeneration(generation, played = true, result = result, slotStart = slotStart, sessionId = mySession)) {
+            return
+        }
 
-        val actualElapsedSec = elapsedSecondsSince(activePopSession?.effectiveStartTime(), Instant.now())
-        finalizePopSession(result, actualElapsedSeconds = if (result == "VERIFIED") actualElapsedSec else null)
-        val actualMs = Duration.between(slotStart, Instant.now()).toMillis()
+        val early = result == "EARLY"
+        val status = if (result == "FAILED") "FAILED" else "VERIFIED"
+        val boundary = Instant.now()
+        val actualElapsedSec = if (early) {
+            elapsedSecondsSince(activePopSession?.effectiveStartTime(), boundary)
+        } else {
+            null
+        }
+        finalizePopSession(
+            status,
+            actualElapsedSeconds = actualElapsedSec,
+            explicitEnd = boundary
+        )
+        val actualMs = Duration.between(slotStart, boundary).toMillis()
         PlaybackSlotLogger.logSlotEnded(
             queueIndex = index,
             asset = asset,
             configuredDurationMs = configuredMs,
             actualDurationMs = actualMs,
             sessionId = sessionId,
-            result = result
+            result = status
         )
         healthMonitor.recordSlotEnded()
 
         if (applyPendingSnapshotIfAny()) {
             emitFullScreen()
         }
-        advanceToNextAsset()
+        if (generation != slotGeneration) return
+        handoffAfterSlot(generation, index, early = result == "EARLY", boundary = boundary, wasReadyAtDeadline = hiddenReady)
     }
 
     private suspend fun abortSlotForGeneration(
         generation: Int,
         played: Boolean,
         result: String = "FAILED",
-        slotStart: Instant = Instant.now()
+        slotStart: Instant = Instant.now(),
+        sessionId: String? = null
     ): Boolean {
         if (generation == slotGeneration) return false
-        activePopSession?.takeIf { !it.finalized }?.let { session ->
+        activePopSession?.takeIf { !it.finalized && (sessionId == null || it.sessionId == sessionId) }?.let { session ->
             val elapsed = if (played && result == "VERIFIED") {
                 elapsedSecondsSince(session.effectiveStartTime(), Instant.now())
             } else {
@@ -933,27 +994,124 @@ class PlaybackViewModel @Inject constructor(
         if (asset.deferPopStartUntilReady()) {
             if (!awaitContentReady(asset.name)) return "FAILED"
         }
-        // Always use this queue index — never find-by-id (duplicates share ids).
         val latest = playlistAssets.getOrNull(queueIndex) ?: asset
-        return if (configuredMs > 0L) {
-            val startTime = activePopSession?.contentReadyTime ?: Instant.now()
-            waitForConfiguredDuration(queueIndex, startTime, configuredMs)
-            videoStopToken++
-            emitFullScreen()
-            delay(150L)
+        if (configuredMs <= 0L) {
+            val completed = awaitVideoEnded(asset.name)
+            if (completed) PlaybackEngineLogger.logVideoCompleted(latest.name)
+            return if (completed) "EARLY" else "FAILED"
+        }
+        val startTime = activePopSession?.contentReadyTime ?: Instant.now()
+        val early = awaitVideoEndOrDeadline(configuredMs)
+        if (!early) {
             PlaybackEngineLogger.logVideoDurationStop(
                 assetName = latest.name,
                 configuredMs = configuredMs,
                 actualMs = Duration.between(startTime, Instant.now()).toMillis()
             )
-            "VERIFIED"
-        } else {
-            val completed = awaitVideoEnded(asset.name)
-            if (completed) {
-                PlaybackEngineLogger.logVideoCompleted(asset.name)
-            }
-            if (completed) "VERIFIED" else "FAILED"
         }
+        return if (early) "EARLY" else "VERIFIED"
+    }
+
+    /** @return true when the file ended before the slot deadline. */
+    private suspend fun awaitVideoEndOrDeadline(configuredMs: Long): Boolean {
+        val start = activePopSession?.contentReadyTime ?: Instant.now()
+        val remaining = configuredMs - Duration.between(start, Instant.now()).toMillis()
+        if (remaining <= 0L) return videoEndedDeferred?.isCompleted == true
+        return withTimeoutOrNull(remaining) { videoEndedDeferred?.await() } != null
+    }
+
+    /**
+     * One advance. A prepared hidden surface becomes visible at [boundary].
+     * If it is not ready yet, keep the current frame until it is, then show it.
+     * That late show is the slow path and keeps a gap in the log.
+     */
+    private suspend fun handoffAfterSlot(
+        generation: Int,
+        fromIndex: Int,
+        early: Boolean,
+        boundary: Instant,
+        wasReadyAtDeadline: Boolean
+    ) {
+        if (generation != slotGeneration || playlistAssets.isEmpty()) return
+        val nextIndex = (fromIndex + 1) % playlistAssets.size
+        var readyAtDeadline = wasReadyAtDeadline
+        if (!hiddenReady) {
+            val stillPlayingVideo = playlistAssets.getOrNull(fromIndex)?.normalizedType() == AssetType.VIDEO && !early
+            if (stillPlayingVideo) {
+                videoStopToken++
+                emitFullScreen()
+            }
+            val becameReady = withTimeoutOrNull(CONTENT_READY_TIMEOUT_MS) {
+                while (!hiddenReady) delay(32)
+                true
+            } == true
+            if (generation != slotGeneration) return
+            if (!becameReady) {
+                logUnshownFailure(playlistAssets[nextIndex])
+                _currentAssetIndex.value = (nextIndex + 1) % playlistAssets.size
+                visiblePrepId = 0L
+                visibleKey = null
+                visibleForceError = false
+                dropHiddenPrep()
+                healthMonitor.recordQueueProgress(_currentAssetIndex.value)
+                PlaybackSlotLogger.logGaplessHandoff(fromIndex, nextIndex, ready = false)
+                handoffLaunch(generation)
+                return
+            }
+            readyAtDeadline = false
+        }
+        val swapAt = if (readyAtDeadline) boundary else Instant.now()
+        gaplessEntry = true
+        gaplessStart = swapAt
+        gaplessFailed = hiddenFailed
+        promoteHidden()
+        _currentAssetIndex.value = nextIndex
+        healthMonitor.recordQueueProgress(nextIndex)
+        PlaybackSlotLogger.logGaplessHandoff(fromIndex, nextIndex, ready = readyAtDeadline)
+        emitFullScreen()
+        handoffLaunch(generation)
+    }
+
+    private fun handoffLaunch(generation: Int) {
+        advanceJob = viewModelScope.launch { runCurrentSlot(generation) }
+    }
+
+    private fun promoteHidden() {
+        visiblePaneId = 1 - visiblePaneId
+        visiblePrepId = hiddenPrepId
+        visibleKey = publishedHiddenKey
+        visibleForceError = hiddenFailed
+        publishedHiddenKey = null
+        hiddenPrepId = -1L
+        hiddenReady = false
+        hiddenFailed = false
+    }
+
+    private fun dropHiddenPrep() {
+        hiddenPrepId = -1L
+        hiddenReady = false
+        hiddenFailed = false
+        publishedHiddenKey = null
+    }
+
+    private fun logUnshownFailure(asset: AssetInfo) {
+        val now = Instant.now()
+        val record = PopLogRecord.failed(
+            deviceName = deviceDisplayName(),
+            deviceId = popDeviceId(),
+            playlistId = playlistInfo?.id,
+            playlistName = playlistInfo?.name.orEmpty(),
+            assetId = asset.id,
+            assetName = asset.name,
+            startTime = now,
+            endTime = now
+        )
+        viewModelScope.launch { queuePopLog(record) }
+        PlaybackSlotLogger.logSlotSkipped(
+            playlistAssets.indexOfFirst { it.id == asset.id }.coerceAtLeast(0),
+            asset,
+            "prepare failed"
+        )
     }
 
     /**
@@ -966,20 +1124,16 @@ class PlaybackViewModel @Inject constructor(
         slotStartConfiguredMs: Long
     ) {
         val targetMs = slotStartConfiguredMs.coerceAtLeast(1L)
-        while (true) {
-            val elapsed = Duration.between(startTime, Instant.now()).toMillis()
-            if (elapsed >= targetMs) {
-                val asset = playlistAssets.getOrNull(queueIndex)
-                    ?: playlistAssets.getOrNull(_currentAssetIndex.value)
-                PlaybackEngineLogger.logDurationUsedDuringPlayback(
-                    assetName = asset?.name.orEmpty(),
-                    configuredMs = targetMs,
-                    actualMs = elapsed
-                )
-                return
-            }
-            delay(minOf(targetMs - elapsed, 250L))
-        }
+        val elapsed = Duration.between(startTime, Instant.now()).toMillis()
+        val remaining = targetMs - elapsed
+        if (remaining > 0L) delay(remaining)
+        val asset = playlistAssets.getOrNull(queueIndex)
+            ?: playlistAssets.getOrNull(_currentAssetIndex.value)
+        PlaybackEngineLogger.logDurationUsedDuringPlayback(
+            assetName = asset?.name.orEmpty(),
+            configuredMs = targetMs,
+            actualMs = Duration.between(startTime, Instant.now()).toMillis()
+        )
     }
 
     private suspend fun awaitContentReady(assetName: String): Boolean {
@@ -1008,6 +1162,13 @@ class PlaybackViewModel @Inject constructor(
             finalizePopSession("VERIFIED", dangling)
         }
 
+        val stampedStart = if (gaplessEntry) gaplessStart ?: Instant.now() else Instant.now()
+        val prepared = gaplessEntry
+        val preparedFailed = gaplessFailed
+        gaplessEntry = false
+        gaplessStart = null
+        gaplessFailed = false
+        if (preparedFailed) visibleForceError = true
         val session = PlaybackSession(
             assetId = asset.id,
             assetName = asset.name,
@@ -1017,14 +1178,17 @@ class PlaybackViewModel @Inject constructor(
             configuredDurationSeconds = (
                 asset.playbackSlotDurationMs(deviceConfigManager.playbackDurations.value) / 1000L
             ).toInt().coerceAtLeast(1),
-            slotStartTime = Instant.now()
+            slotStartTime = stampedStart
         )
-        if (!asset.deferPopStartUntilReady()) {
+        if (prepared || preparedFailed || !asset.deferPopStartUntilReady()) {
             session.contentReadyTime = session.slotStartTime
         }
         activePopSession = session
         PopSessionLogger.logSessionStarted(session)
         emitFullScreen()
+        if (session.contentReadyTime != null && contentReadyDeferred?.isCompleted == false) {
+            contentReadyDeferred?.complete(Unit)
+        }
     }
 
     fun onVideoRendererPulse() {
@@ -1047,17 +1211,52 @@ class PlaybackViewModel @Inject constructor(
         videoEndedDeferred?.complete(Unit)
     }
 
+    fun onVideoEndedPrep(prepId: Long) {
+        if (prepId != visiblePrepId) return
+        val session = activePopSession ?: return
+        if (session.finalized) return
+        val started = session.effectiveStartTime()
+        if (Duration.between(started, Instant.now()).toMillis() < 400L) return
+        if (videoEndedDeferred?.isCompleted == false) {
+            videoEndedDeferred?.complete(Unit)
+        }
+    }
+
+    fun onPaneReady(prepId: Long) {
+        if (prepId == hiddenPrepId && prepId != visiblePrepId) {
+            hiddenReady = true
+            return
+        }
+        if (prepId != visiblePrepId) return
+        val assetName = playlistAssets.getOrNull(_currentAssetIndex.value)?.name ?: return
+        onPlaybackStarted(assetName)
+    }
+
+    fun onPaneFailed(prepId: Long) {
+        if (prepId == hiddenPrepId && prepId != visiblePrepId) {
+            if (hiddenFailed) return
+            hiddenFailed = true
+            hiddenReady = true
+            emitFullScreen()
+            return
+        }
+        if (prepId != visiblePrepId) return
+        val assetName = playlistAssets.getOrNull(_currentAssetIndex.value)?.name ?: return
+        onAssetFailed(assetName)
+    }
+
     private suspend fun finalizePopSession(
         status: String,
         session: PlaybackSession? = activePopSession,
-        actualElapsedSeconds: Int? = null
+        actualElapsedSeconds: Int? = null,
+        explicitEnd: Instant? = null
     ) {
         val active = session ?: return
         if (active.finalized) return
         active.finalized = true
 
         val startTime = active.effectiveStartTime()
-        val endTime = active.effectiveEndTime(status, actualElapsedSeconds)
+        val endTime = explicitEnd ?: active.effectiveEndTime(status, actualElapsedSeconds)
         val durationSeconds = active.effectiveDurationSeconds(status, actualElapsedSeconds)
 
         PopSessionLogger.logSessionEnded(
@@ -1164,6 +1363,12 @@ class PlaybackViewModel @Inject constructor(
                 assetName = asset.name
             )
         }
+        val visibleKeyNow = paneKey(index, asset)
+        if (visiblePrepId == 0L || visibleKey != visibleKeyNow) {
+            visibleKey = visibleKeyNow
+            visiblePrepId = ++prepSequence
+        }
+        val hiddenPane = buildHiddenPane(index)
         _uiState.value = PlaybackUiState.PlayingFullScreen(
             asset = asset,
             localFile = localFiles[asset.id],
@@ -1172,7 +1377,19 @@ class PlaybackViewModel @Inject constructor(
             playlistName = playlistInfo?.name.orEmpty(),
             tickers = currentTickers,
             playbackSessionId = activePopSession?.sessionId.orEmpty(),
-            videoStopToken = videoStopToken
+            videoStopToken = videoStopToken,
+            panes = listOfNotNull(
+                PlaybackPane(
+                    paneId = visiblePaneId,
+                    prepId = visiblePrepId,
+                    asset = asset,
+                    localFile = localFiles[asset.id],
+                    index = index,
+                    visible = true,
+                    showError = visibleForceError || !asset.isPlayable(localFiles)
+                ),
+                hiddenPane
+            )
         )
         healthMonitor.recordPlaybackContext(
             assetName = asset.name,
@@ -1180,6 +1397,37 @@ class PlaybackViewModel @Inject constructor(
             queueSize = playlistAssets.size
         )
         updatePlaybackHealthState()
+    }
+
+    private fun buildHiddenPane(visibleIndex: Int): PlaybackPane? {
+        if (playlistAssets.isEmpty()) return null
+        val nextIndex = (visibleIndex + 1) % playlistAssets.size
+        val next = playlistAssets[nextIndex]
+        val key = paneKey(nextIndex, next)
+        if (key != publishedHiddenKey) {
+            publishedHiddenKey = key
+            hiddenPrepId = ++prepSequence
+            hiddenReady = false
+            hiddenFailed = false
+            if (!next.isPlayable(localFiles)) {
+                hiddenFailed = true
+                hiddenReady = true
+            }
+        }
+        return PlaybackPane(
+            paneId = 1 - visiblePaneId,
+            prepId = hiddenPrepId,
+            asset = next,
+            localFile = localFiles[next.id],
+            index = nextIndex,
+            visible = false,
+            showError = hiddenFailed || !next.isPlayable(localFiles)
+        )
+    }
+
+    private fun paneKey(index: Int, asset: AssetInfo): String {
+        val file = localFiles[asset.id]?.absolutePath
+        return "$index:${asset.id}:$file:${asset.cmsDurationSeconds}"
     }
 
     private fun snapshotIsPlayable(snapshot: PlaybackSnapshot): Boolean {
@@ -1391,6 +1639,16 @@ fun onUrlLoadFailed(assetName: String) {
     }
 }
 
+data class PlaybackPane(
+    val paneId: Int,
+    val prepId: Long,
+    val asset: AssetInfo,
+    val localFile: File?,
+    val index: Int,
+    val visible: Boolean,
+    val showError: Boolean = false
+)
+
 sealed class PlaybackUiState {
     data object Loading : PlaybackUiState()
     data class Downloading(val current: Int, val total: Int) : PlaybackUiState()
@@ -1404,7 +1662,8 @@ sealed class PlaybackUiState {
         val playlistName: String,
         val tickers: List<TickerDisplayConfig> = emptyList(),
         val playbackSessionId: String = "",
-        val videoStopToken: Long = 0L
+        val videoStopToken: Long = 0L,
+        val panes: List<PlaybackPane> = emptyList()
     ) : PlaybackUiState()
     data class Error(val message: String) : PlaybackUiState()
 }

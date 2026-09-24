@@ -129,23 +129,26 @@ fun PlaybackScreen(
                 }
             }
             is PlaybackUiState.PlayingFullScreen -> {
-                androidx.compose.runtime.key(
-                    state.playbackSessionId.ifEmpty { "idx-${state.currentIndex}" }
-                ) {
-                    AssetPlayback(
-                        asset = state.asset,
-                        localFile = state.localFile,
-                        playbackSessionId = state.playbackSessionId,
-                        videoStopToken = state.videoStopToken,
-                        modifier = Modifier.fillMaxSize(),
-                        onAssetFailed = { viewModel.onAssetFailed(it) },
-                        onPlaybackStarted = { viewModel.onPlaybackStarted(it) },
-                        onVideoEnded = { viewModel.onVideoEnded(it) },
-                        onUrlLoadSuccess = { viewModel.onUrlLoadSuccess(it) },
-                        onUrlLoadFailed = { viewModel.onUrlLoadFailed(it) },
-                        onVideoRendererPulse = { viewModel.onVideoRendererPulse() }
-                    )
-                }
+                GaplessPlaybackStage(
+                    panes = state.panes.ifEmpty {
+                        listOf(
+                            PlaybackPane(
+                                paneId = 0,
+                                prepId = state.currentIndex.toLong(),
+                                asset = state.asset,
+                                localFile = state.localFile,
+                                index = state.currentIndex,
+                                visible = true
+                            )
+                        )
+                    },
+                    videoStopToken = state.videoStopToken,
+                    onPaneReady = viewModel::onPaneReady,
+                    onPaneFailed = viewModel::onPaneFailed,
+                    onVideoEnded = viewModel::onVideoEndedPrep,
+                    onVideoRendererPulse = viewModel::onVideoRendererPulse,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
             is PlaybackUiState.Error -> ErrorState(
                 message = state.message,

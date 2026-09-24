@@ -51,6 +51,14 @@ object PlaybackSlotLogger {
         )
     }
 
+    fun logGaplessHandoff(fromIndex: Int, toIndex: Int, ready: Boolean) {
+        Log.i(
+            TAG,
+            "Slot HANDOFF: from=$fromIndex to=$toIndex " +
+                if (ready) "gapless" else "slow"
+        )
+    }
+
     fun logSlotSkipped(queueIndex: Int, asset: AssetInfo, reason: String) {
         Log.w(
             TAG,
