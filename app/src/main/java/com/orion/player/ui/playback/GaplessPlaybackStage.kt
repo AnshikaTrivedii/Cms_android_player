@@ -7,10 +7,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
@@ -81,11 +81,11 @@ fun GaplessPlaybackStage(
         )
         panes.forEach { pane ->
             val isVideo = pane.asset.normalizedType() == AssetType.VIDEO && !pane.showError
+            key(pane.paneId) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(if (pane.visible && !isVideo) 1f else 0f)
-                    .alpha(if (pane.visible && !isVideo) 1f else 0f)
             ) {
                 if (pane.showError || isVideo) {
                     if (pane.showError && pane.visible) {
@@ -103,6 +103,7 @@ fun GaplessPlaybackStage(
                         onUrlLoadFailed = { _ -> ready(pane.prepId) }
                     )
                 }
+            }
             }
         }
     }
@@ -154,8 +155,6 @@ private fun VideoSurface(
             if (playerView.resizeMode != mode) playerView.resizeMode = mode
         },
         onRelease = { it.player = null },
-        modifier = modifier
-            .zIndex(if (inFront) 2f else 0f)
-            .alpha(if (inFront) 1f else 0f)
+        modifier = modifier.zIndex(if (inFront) 2f else 0f)
     )
 }
