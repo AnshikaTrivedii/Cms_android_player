@@ -16,24 +16,23 @@ import com.orion.player.data.recovery.KioskController
  *
  *     adb shell dpm set-device-owner com.orion.player/.receiver.OrionDeviceAdminReceiver
  *
- * Once provisioned it unlocks Lock Task (kiosk) mode and persistent Home-app behaviour.
- * See docs/AUTO_START_PROVISIONING.md.
+ * Once provisioned it unlocks Lock Task (kiosk) mode.
  */
 class OrionDeviceAdminReceiver : DeviceAdminReceiver() {
 
     override fun onEnabled(context: Context, intent: android.content.Intent) {
         super.onEnabled(context, intent)
         Log.i(TAG, "Device admin enabled — dedicated device features available")
-        KioskController.applyDedicatedDevicePolicies(context)
+        KioskController.ensureLockTaskAllowed(context)
     }
 
     override fun onDisabled(context: Context, intent: android.content.Intent) {
         super.onDisabled(context, intent)
-        Log.w(TAG, "Device admin disabled — kiosk and Home-app enforcement are now unavailable")
+        Log.w(TAG, "Device admin disabled — kiosk enforcement is now unavailable")
     }
 
     companion object {
-        private const val TAG = "OrionAutoStart"
+        private const val TAG = "OrionKiosk"
 
         fun componentName(context: Context): ComponentName =
             ComponentName(context.applicationContext, OrionDeviceAdminReceiver::class.java)

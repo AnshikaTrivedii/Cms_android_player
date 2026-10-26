@@ -41,7 +41,6 @@ class SecurePrefs @Inject constructor(
         private const val KEY_PAIRING_SECRET = "pairing_secret"
         private const val KEY_PAIRING_CODE = "pairing_code"
         private const val KEY_KIOSK_MODE = "kiosk_mode_enabled"
-        private const val KEY_HOME_APP_MODE = "home_app_mode_enabled"
         private const val KEY_LAST_SUCCESSFUL_SYNC_AT = "last_successful_sync_at"
         private const val KEY_SYNC_INTERVAL_SECONDS = "sync_interval_seconds"
         private const val KEY_REVISION_POLL_INTERVAL_SECONDS = "revision_poll_interval_seconds"
@@ -145,14 +144,6 @@ class SecurePrefs @Inject constructor(
     var kioskModeEnabled: Boolean
         get() = prefs.getBoolean(KEY_KIOSK_MODE, PlayerRuntimeConfig.KIOSK_MODE_ENABLED_DEFAULT)
         set(value) = prefs.edit().putBoolean(KEY_KIOSK_MODE, value).apply()
-
-    /**
-     * When true, persist Orion as Home on a device-owner device. Device-owner
-     * deployments always apply persistent Home regardless of this flag.
-     */
-    var homeAppModeEnabled: Boolean
-        get() = prefs.getBoolean(KEY_HOME_APP_MODE, false)
-        set(value) = prefs.edit().putBoolean(KEY_HOME_APP_MODE, value).apply()
 
     var lastSuccessfulSyncAt: String?
         get() = prefs.getString(KEY_LAST_SUCCESSFUL_SYNC_AT, null)

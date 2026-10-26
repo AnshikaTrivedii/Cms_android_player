@@ -10,7 +10,7 @@ import com.orion.player.receiver.RelaunchReceiver
 import com.orion.player.service.PlayerForegroundService
 
 /**
- * Central entry for launching the player from boot, crash recovery, or watchdog.
+ * Central entry for launching the player from crash recovery or watchdog.
  *
  * Kept as the stable façade used across the app; the launch itself is delegated to
  * [AutoStartCoordinator] so that duplicate-launch protection and auto-launch logging are
@@ -19,18 +19,6 @@ import com.orion.player.service.PlayerForegroundService
 object PlayerLaunchHelper {
 
     const val EXTRA_LAUNCH_SOURCE = AutoStartCoordinator.EXTRA_LAUNCH_SOURCE
-
-    fun launchFromBoot(context: Context, bootAction: String) {
-        OrionRecoveryLogger.logDeviceBootDetected(bootAction)
-        OrionRecoveryLogger.logBootReceiverTriggered(bootAction)
-        // The foreground service owns the retry/backoff loop: components are not
-        // necessarily ready the instant BOOT_COMPLETED arrives, and some platforms drop
-        // the first background activity start.
-        BootStateStore.from(context).markBootLaunchPending()
-        AutoStartCoordinator.logLaunchPrivileges(context)
-        startProtection(context)
-        launchPlayer(context, "boot.$bootAction")
-    }
 
     fun startProtection(context: Context) {
         PlayerForegroundService.start(context)

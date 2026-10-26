@@ -1,9 +1,7 @@
 package com.orion.player
 
 import android.app.Application
-import android.content.Context
 import android.os.Build
-import android.os.UserManager
 import android.util.Log
 import android.webkit.WebView
 import com.orion.player.data.enterprise.DeviceLogCollector
@@ -31,25 +29,11 @@ class OrionPlayerApp : Application() {
         }
         CrashRecovery.install(this, crashLogStore, deviceLogCollector)
 
-        // The direct-boot-aware boot receiver can start this process before the user
-        // unlocks the device. Nothing below is usable then: the encrypted preferences, the
-        // database, the asset cache and the foreground service all live behind credential-
-        // protected storage. BOOT_COMPLETED arrives after unlock and starts everything.
-        if (!isUserUnlocked()) {
-            Log.i("OrionPlayer", "Application started before user unlock — deferring startup")
-            return
-        }
-
         reportProcessRecovery()
         PlayerLaunchHelper.startProtection(this)
         deviceLogCollector.logBoot("application.onCreate")
         Log.i("OrionPlayer", "Application started")
         OrionRecoveryLogger.logPlayerStarted("application.onCreate")
-    }
-
-    private fun isUserUnlocked(): Boolean {
-        val userManager = getSystemService(Context.USER_SERVICE) as? UserManager ?: return true
-        return runCatching { userManager.isUserUnlocked }.getOrDefault(true)
     }
 
     /**
@@ -60,9 +44,6 @@ class OrionPlayerApp : Application() {
     private fun reportProcessRecovery() {
         val store = BootStateStore.from(this)
         val uncleanForMs = store.consumeUncleanShutdown() ?: return
-        // A device reboot also leaves the flag set; that is a boot, not a process kill,
-        // and the boot receiver already logged it.
-        if (store.bootLaunchPending) return
         AutoStartLogger.processRecovery(uncleanForMs)
         deviceLogCollector.logBoot("process.recovery")
     }

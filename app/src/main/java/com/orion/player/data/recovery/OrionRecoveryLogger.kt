@@ -9,14 +9,6 @@ import android.util.Log
 object OrionRecoveryLogger {
     private const val TAG = "OrionRecovery"
 
-    fun logDeviceBootDetected(action: String) {
-        Log.i(TAG, "Device boot detected: action=$action")
-    }
-
-    fun logBootReceiverTriggered(action: String) {
-        Log.i(TAG, "Boot receiver triggered: action=$action")
-    }
-
     fun logPlayerStarted(source: String) {
         Log.i(TAG, "Player started: source=$source")
     }

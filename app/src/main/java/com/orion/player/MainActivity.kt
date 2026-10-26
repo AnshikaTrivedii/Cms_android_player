@@ -2,7 +2,6 @@ package com.orion.player
 
 import android.content.Intent
 import android.content.pm.ActivityInfo
-import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowInsets
@@ -19,7 +18,6 @@ import com.orion.player.data.config.DeviceConfigManager
 import com.orion.player.data.config.DisplayOrientation
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.recovery.AutoStartCoordinator
-import com.orion.player.data.recovery.AutoStartLogger
 import com.orion.player.data.recovery.BootStateStore
 import com.orion.player.data.recovery.KioskController
 import com.orion.player.data.recovery.OrionRecoveryLogger
@@ -52,17 +50,12 @@ class MainActivity : ComponentActivity() {
         launchSource = intent?.getStringExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE)
             ?: "activity.onCreate"
         OrionRecoveryLogger.logPlayerStarted(launchSource)
-        if (launchSource.startsWith("boot.")) {
-            AutoStartLogger.bootRecovery(launchSource)
-        }
-        applyDedicatedHomeIfNeeded()
-
+        KioskController.clearLegacyHomeAssignment(this)
         if (securePrefs.isPaired && securePrefs.deviceToken.isNullOrBlank()) {
             securePrefs.clearCredentials()
         }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        keepScreenAwakeForSignage()
         enableEdgeToEdge()
         setupImmersiveMode()
         applyDisplayOrientation(deviceConfigManager.orientation.value)
@@ -94,9 +87,7 @@ class MainActivity : ComponentActivity() {
         healthMonitor.recordActivityResumed()
         // The only reliable proof that the player reached the screen: a background
         // activity start that the platform blocks fails silently.
-        AutoStartCoordinator.onPlayerVisible(this, launchSource)
-        AutoStartLogger.homeAppStatus(AutoStartCoordinator.isDefaultHomeApp(this))
-        requestHomeRoleOncePerBoot()
+        AutoStartCoordinator.onPlayerVisible(this)
     }
 
     override fun onStop() {
@@ -116,7 +107,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        AutoStartCoordinator.clearUserExit()
         setupImmersiveMode()
         applyKioskModeIfEnabled()
         applyDisplayOrientation(deviceConfigManager.orientation.value)
@@ -124,7 +114,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (AutoStartCoordinator.isUserExitAllowed()) return
         if (securePrefs.kioskModeEnabled && securePrefs.isAuthenticated()) {
             bringPlayerToForeground("kiosk.home")
         }
@@ -157,55 +146,6 @@ class MainActivity : ComponentActivity() {
             KioskController.ensureLockTaskAllowed(this)
         }
         KioskController.applyIfPermitted(this, kioskRequested)
-    }
-
-    /**
-     * A signage panel must show content even when the device boots to a lock screen.
-     * FLAG_KEEP_SCREEN_ON alone does not wake the display or draw over the keyguard, and
-     * these window flags are scoped to this Activity rather than disabling power
-     * management for the whole device.
-     */
-    private fun keepScreenAwakeForSignage() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-            )
-        }
-        if (securePrefs.kioskModeEnabled) {
-            @Suppress("DEPRECATION")
-            window.addFlags(WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD)
-        }
-    }
-
-    /** Device owner always pins Home. The stored flag covers a later opt-in. */
-    private fun applyDedicatedHomeIfNeeded() {
-        if (KioskController.isDeviceOwner(this)) {
-            securePrefs.homeAppModeEnabled = true
-            KioskController.applyDedicatedDevicePolicies(this)
-            return
-        }
-        if (securePrefs.homeAppModeEnabled) {
-            KioskController.applyHomeAppRole(this, enabled = true)
-        }
-    }
-
-    /**
-     * Ask once per boot to become the default Home app. Device-owner devices skip
-     * the picker because persistent Home is applied in [applyDedicatedHomeIfNeeded].
-     */
-    private fun requestHomeRoleOncePerBoot() {
-        if (AutoStartCoordinator.isDefaultHomeApp(this) || KioskController.isDeviceOwner(this)) {
-            return
-        }
-        val store = BootStateStore.from(this)
-        if (!store.shouldPromptHomeRole()) return
-        store.markHomeRolePrompted()
-        KioskController.requestHomeRole(this)
     }
 
     private fun bringPlayerToForeground(source: String) {

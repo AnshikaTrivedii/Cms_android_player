@@ -26,11 +26,7 @@ object HeartbeatPayloadNormalizer {
             popPendingCount = null,
             popLastGeneratedAt = null,
             popLastUploadedAt = null,
-            popLastError = null,
-            permissions = request.permissions?.copy(
-                defaultHome = null,
-                deviceOwner = null
-            )
+            popLastError = null
         )
     }
 

@@ -44,14 +44,10 @@ data class DevicePermissionsPayload(
     val internet: Boolean? = null,
     val storage: Boolean? = null,
     val foregroundService: Boolean? = null,
-    val bootReceiver: Boolean? = null,
     val wakeLock: Boolean? = null,
     val notification: Boolean? = null,
     val batteryOptimizationDisabled: Boolean? = null,
-    val autoStart: Boolean? = null,
-    val kioskMode: Boolean? = null,
-    val defaultHome: Boolean? = null,
-    val deviceOwner: Boolean? = null
+    val kioskMode: Boolean? = null
 )
 
 data class HeartbeatRequest(

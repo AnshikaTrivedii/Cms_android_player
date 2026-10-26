@@ -27,15 +27,11 @@ data class DeviceHealthSnapshot(
 data class DevicePermissionSnapshot(
     val internet: Boolean,
     val networkState: Boolean,
-    val bootReceiver: Boolean,
     val foregroundService: Boolean,
     val wakeLock: Boolean,
     val postNotifications: Boolean,
     val batteryOptimizationIgnored: Boolean,
-    val autoStartLikely: Boolean,
-    val kioskModeEnabled: Boolean,
-    val defaultHome: Boolean,
-    val deviceOwner: Boolean
+    val kioskModeEnabled: Boolean
 )
 
 /** Remote command issued by CMS via heartbeat or sync response. */

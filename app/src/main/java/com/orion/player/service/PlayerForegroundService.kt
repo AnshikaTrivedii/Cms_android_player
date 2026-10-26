@@ -1,6 +1,5 @@
 package com.orion.player.service
 
-import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,8 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import androidx.core.content.ContextCompat
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -21,10 +18,7 @@ import com.orion.player.R
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.recovery.AutoStartCoordinator
 import com.orion.player.data.recovery.AutoStartLogger
-import com.orion.player.data.recovery.BootStateStore
-import com.orion.player.data.recovery.KioskController
 import com.orion.player.data.recovery.OrionRecoveryLogger
-import com.orion.player.receiver.ScreenOnReceiver
 import com.orion.player.data.recovery.PlaybackRecoveryCoordinator
 import com.orion.player.data.recovery.PlayerHealthMonitor
 import com.orion.player.data.recovery.PlayerLaunchHelper
@@ -68,52 +62,11 @@ class PlayerForegroundService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var watchdogStarted = false
     private var healthCheckCount = 0
-    private val screenOnReceiver = ScreenOnReceiver()
-    private var screenOnReceiverRegistered = false
 
     private val healthCheckRunnable = object : Runnable {
         override fun run() {
             performWatchdogCheck()
             handler.postDelayed(this, PlayerRuntimeConfig.WATCHDOG_INTERVAL_MS)
-        }
-    }
-
-    /**
-     * Boot startup is not instantaneous and the first background activity start after boot
-     * can be dropped by the platform, so the launch is retried on a widening schedule until
-     * the Activity is genuinely on screen.
-     */
-    private val bootLaunchRunnable = object : Runnable {
-        override fun run() {
-            val bootState = BootStateStore.from(applicationContext)
-            if (!bootState.bootLaunchPending) return
-
-            if (AutoStartCoordinator.isPlayerInForeground(applicationContext)) {
-                bootState.clearBootLaunchPending()
-                startForeground(NOTIFICATION_ID, buildNotification())
-                return
-            }
-
-            val attempt = bootState.recordBootLaunchAttempt()
-            if (attempt > PlayerRuntimeConfig.BOOT_LAUNCH_BACKOFF_MS.size) {
-                bootState.clearBootLaunchPending()
-                AutoStartCoordinator.logLaunchPrivileges(applicationContext)
-                AutoStartLogger.autoLaunchBlocked(
-                    attempts = attempt - 1,
-                    defaultHome = AutoStartCoordinator.isDefaultHomeApp(applicationContext),
-                    deviceOwner = KioskController.isDeviceOwner(applicationContext)
-                )
-                startForeground(NOTIFICATION_ID, buildNotification())
-                return
-            }
-
-            PlayerLaunchHelper.launchPlayer(
-                applicationContext,
-                "boot.retry",
-                attempt = attempt + 1
-            )
-            startForeground(NOTIFICATION_ID, buildNotification())
-            handler.postDelayed(this, PlayerRuntimeConfig.BOOT_LAUNCH_BACKOFF_MS[attempt - 1])
         }
     }
 
@@ -124,7 +77,6 @@ class PlayerForegroundService : Service() {
         OrionRecoveryLogger.logForegroundServiceStarted()
         startForeground(NOTIFICATION_ID, buildNotification())
         acquireWakeLock()
-        registerScreenOnReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -139,8 +91,6 @@ class PlayerForegroundService : Service() {
         handler.removeCallbacks(healthCheckRunnable)
         handler.post(healthCheckRunnable)
 
-        scheduleBootLaunchRetryIfPending()
-
         if (securePrefs.isAuthenticated()) {
             heartbeatScheduler.start()
             popLogFlushScheduler.start()
@@ -151,22 +101,8 @@ class PlayerForegroundService : Service() {
         return START_STICKY
     }
 
-    private fun scheduleBootLaunchRetryIfPending() {
-        handler.removeCallbacks(bootLaunchRunnable)
-        val bootState = BootStateStore.from(applicationContext)
-        if (!bootState.bootLaunchPending) return
-        val attempt = bootState.bootLaunchAttempts
-            .coerceAtMost(PlayerRuntimeConfig.BOOT_LAUNCH_BACKOFF_MS.size - 1)
-        handler.postDelayed(
-            bootLaunchRunnable,
-            PlayerRuntimeConfig.BOOT_LAUNCH_BACKOFF_MS[attempt]
-        )
-    }
-
     override fun onDestroy() {
         handler.removeCallbacks(healthCheckRunnable)
-        handler.removeCallbacks(bootLaunchRunnable)
-        unregisterScreenOnReceiver()
         releaseWakeLock()
         val shouldRestart = securePrefs.isAuthenticated()
         super.onDestroy()
@@ -213,7 +149,6 @@ class PlayerForegroundService : Service() {
         )
 
         if (!healthMonitor.isActivityAlive) {
-            if (AutoStartCoordinator.isUserExitAllowed()) return
             recoverActivity()
             return
         }
@@ -272,27 +207,6 @@ class PlayerForegroundService : Service() {
         }
     }
 
-    private fun registerScreenOnReceiver() {
-        if (screenOnReceiverRegistered) return
-        val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_SCREEN_ON)
-            addAction(Intent.ACTION_USER_PRESENT)
-        }
-        ContextCompat.registerReceiver(
-            this,
-            screenOnReceiver,
-            filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
-        screenOnReceiverRegistered = true
-    }
-
-    private fun unregisterScreenOnReceiver() {
-        if (!screenOnReceiverRegistered) return
-        runCatching { unregisterReceiver(screenOnReceiver) }
-        screenOnReceiverRegistered = false
-    }
-
     private fun acquireWakeLock() {
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         if (wakeLock?.isHeld == true) return
@@ -313,62 +227,32 @@ class PlayerForegroundService : Service() {
     private fun buildNotification(): Notification {
         createNotificationChannel()
 
-        val bootPending = BootStateStore.from(this).bootLaunchPending
         val pendingIntent = createLaunchPendingIntent()
-        val channelId = if (bootPending) CHANNEL_BOOT_ID else CHANNEL_ID
-        val builder = NotificationCompat.Builder(this, channelId)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.foreground_service_title))
-            .setContentText(
-                if (bootPending) {
-                    getString(R.string.foreground_service_boot_text)
-                } else {
-                    getString(R.string.foreground_service_text)
-                }
-            )
+            .setContentText(getString(R.string.foreground_service_text))
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-
-        if (bootPending) {
-            builder.setCategory(Notification.CATEGORY_ALARM)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setFullScreenIntent(pendingIntent, true)
-        } else {
-            builder.setCategory(Notification.CATEGORY_SERVICE)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-        }
-
-        return builder.build()
+            .build()
     }
 
     private fun createLaunchPendingIntent(): PendingIntent {
         val openIntent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            putExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE, "notification.fullscreen")
+            putExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE, "notification.tap")
         }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        return if (Build.VERSION.SDK_INT >= 34) {
-            val withOptions = runCatching {
-                val options = ActivityOptions.makeBasic().apply {
-                    pendingIntentBackgroundActivityStartMode =
-                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                }
-                PendingIntent.getActivity(this, 0, openIntent, flags, options.toBundle())
-            }
-            withOptions.getOrElse {
-                PendingIntent.getActivity(this, 0, openIntent, flags)
-            }
-        } else {
-            PendingIntent.getActivity(this, 0, openIntent, flags)
-        }
+        return PendingIntent.getActivity(this, 0, openIntent, flags)
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java) ?: return
+        manager.deleteNotificationChannel(LEGACY_BOOT_CHANNEL_ID)
         manager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
@@ -379,22 +263,11 @@ class PlayerForegroundService : Service() {
                 setShowBadge(false)
             }
         )
-        manager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_BOOT_ID,
-                getString(R.string.foreground_service_boot_channel_name),
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = getString(R.string.foreground_service_boot_channel_description)
-                setShowBadge(false)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-            }
-        )
     }
 
     companion object {
         private const val CHANNEL_ID = "orion_player_foreground"
-        private const val CHANNEL_BOOT_ID = "orion_player_boot_launch"
+        private const val LEGACY_BOOT_CHANNEL_ID = "orion_player_boot_launch"
         private const val NOTIFICATION_ID = 1001
 
         fun start(context: Context) {

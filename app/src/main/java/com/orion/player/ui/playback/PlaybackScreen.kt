@@ -38,7 +38,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.orion.player.ui.playback.ticker.SignageLayeredPlayback
-import com.orion.player.ui.launcher.HomeEscapeOverlayLayer
 
 @Composable
 fun PlaybackScreen(
@@ -153,7 +152,6 @@ fun PlaybackScreen(
             )
         }
         }
-        HomeEscapeOverlayLayer()
         OfflineStatusBadge(visible = !isOnline)
     }
     }

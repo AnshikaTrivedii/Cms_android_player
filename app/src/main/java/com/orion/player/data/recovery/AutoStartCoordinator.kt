@@ -1,11 +1,7 @@
 package com.orion.player.data.recovery
 
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
-import android.provider.Settings
 import com.orion.player.MainActivity
 
 /**
@@ -33,14 +29,6 @@ object AutoStartCoordinator {
     private var lastDispatchAtMs = 0L
 
     /**
-     * True after the operator explicitly leaves via the Back overlay (Settings / another
-     * app). Kiosk pull-back, watchdog activity relaunch, and screen-on relaunch must not
-     * fight that until [MainActivity] is in the foreground again.
-     */
-    @Volatile
-    private var userExitAllowed = false
-
-    /**
      * True while [MainActivity] is between onStart and onStop.
      *
      * Deliberately an in-process flag rather than an ActivityManager importance check:
@@ -59,20 +47,6 @@ object AutoStartCoordinator {
     fun launch(context: Context, source: String, attempt: Int = 1): Boolean {
         if (isPlayerInForeground(context)) {
             AutoStartLogger.playerAlreadyRunning(source)
-            return true
-        }
-
-        if (userExitAllowed) {
-            return true
-        }
-
-        // First boot attempt: Android starts the default Home app itself. Skip the
-        // extra startActivity so we do not race the system launcher. Retries still
-        // dispatch if MainActivity never becomes visible.
-        if (attempt == 1 && source.startsWith("boot.") && isDefaultHomeApp(context)) {
-            AutoStartLogger.autoLaunchStart(source, attempt)
-            AutoStartLogger.homeRoleDeferredToSystem()
-            pendingLaunchSource = source
             return true
         }
 
@@ -101,64 +75,19 @@ object AutoStartCoordinator {
         }
     }
 
-    /** Called from [MainActivity.onStart] — the only proof that the player really launched. */
-    fun onPlayerVisible(context: Context, fallbackSource: String) {
+    /** Called from [MainActivity.onStart] — the only proof that a requested launch landed. */
+    fun onPlayerVisible(context: Context) {
         playerVisible = true
         val store = BootStateStore.from(context)
-        val source = pendingLaunchSource ?: fallbackSource.takeIf { store.bootLaunchPending }
-        if (source != null) {
+        pendingLaunchSource?.let { source ->
             AutoStartLogger.autoLaunchSuccess(source)
         }
         pendingLaunchSource = null
-        store.clearBootLaunchPending()
         store.markPlayerRunning()
     }
 
     fun onPlayerHidden() {
         playerVisible = false
-    }
-
-    /** Operator opened Settings or another app from the Home-escape overlay. */
-    fun allowUserExit(target: String) {
-        userExitAllowed = true
-        AutoStartLogger.userExitAllowed(target)
-    }
-
-    /** Called from [MainActivity.onResume] once the player is back on screen. */
-    fun clearUserExit() {
-        if (!userExitAllowed) return
-        userExitAllowed = false
-        AutoStartLogger.userExitCleared()
-    }
-
-    fun isUserExitAllowed(): Boolean = userExitAllowed
-
-    /** Whether Orion is currently the device's default Home app. */
-    fun isDefaultHomeApp(context: Context): Boolean {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        val resolved = runCatching {
-            context.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
-        }.getOrNull() ?: return false
-        return resolved.activityInfo?.packageName == context.packageName
-    }
-
-    fun logLaunchPrivileges(context: Context) {
-        val overlayGranted = runCatching { Settings.canDrawOverlays(context) }.getOrDefault(false)
-        val fullScreenIntentAllowed = if (Build.VERSION.SDK_INT >= 34) {
-            runCatching {
-                context.getSystemService(NotificationManager::class.java)
-                    ?.canUseFullScreenIntent() == true
-            }.getOrDefault(false)
-        } else {
-            true
-        }
-        AutoStartLogger.launchPrivileges(
-            sdk = Build.VERSION.SDK_INT,
-            overlayGranted = overlayGranted,
-            defaultHome = isDefaultHomeApp(context),
-            deviceOwner = KioskController.isDeviceOwner(context),
-            fullScreenIntentAllowed = fullScreenIntentAllowed
-        )
     }
 
     private const val MIN_DISPATCH_GAP_MS = 3_000L

@@ -30,7 +30,6 @@ Our platform has a backend (NestJS) that manages `Organizations`, `Playlists`, a
 
 2.  **Kiosk Mode / Lock Down:**
     *   The app must act as a device owner or utilize `startLockTask()` to pin the app to the screen.
-    *   It should automatically launch on device boot (using `RECEIVE_BOOT_COMPLETED`).
     *   Hide system UI (immersive full-screen mode).
     *   Keep the screen on at all times (`FLAG_KEEP_SCREEN_ON`).
 
