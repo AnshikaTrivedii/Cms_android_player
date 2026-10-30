@@ -4,8 +4,8 @@ package com.orion.player.data.recovery
  * Runtime configuration for kiosk mode, foreground protection, and self-recovery.
  */
 object PlayerRuntimeConfig {
-    /** Default kiosk mode for production signage deployments. */
-    const val KIOSK_MODE_ENABLED_DEFAULT = true
+    /** Kiosk lock is off unless a device is explicitly provisioned for it. */
+    const val KIOSK_MODE_ENABLED_DEFAULT = false
 
     /** Watchdog health-check interval. */
     const val WATCHDOG_INTERVAL_MS = 30_000L

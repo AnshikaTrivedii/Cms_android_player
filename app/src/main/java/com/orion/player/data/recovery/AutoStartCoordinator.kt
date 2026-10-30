@@ -7,8 +7,8 @@ import com.orion.player.MainActivity
 /**
  * Single entry point for bringing the player Activity to the foreground.
  *
- * Everything that can start the player (boot receiver, crash handler, watchdog, remote
- * restart, task-removal) goes through here so that:
+ * Callers that may start the player (crash handler, playback-watchdog fallback, remote
+ * restart) go through here so that:
  * - a launch is never issued while the player is already on screen (no duplicate task),
  * - concurrent callers cannot dispatch a burst of launches,
  * - `PLAYER_AUTO_LAUNCH_SUCCESS` is only logged once the Activity is genuinely visible,

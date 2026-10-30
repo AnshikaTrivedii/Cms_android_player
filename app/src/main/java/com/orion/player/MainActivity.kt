@@ -50,6 +50,10 @@ class MainActivity : ComponentActivity() {
         launchSource = intent?.getStringExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE)
             ?: "activity.onCreate"
         OrionRecoveryLogger.logPlayerStarted(launchSource)
+        // Older builds saved kiosk-on and registered this app as the Home app, which
+        // trapped Back behind the Leave player screen. Drop both so Back can exit.
+        securePrefs.kioskModeEnabled = false
+        runCatching { packageManager.clearPackagePreferredActivities(packageName) }
         KioskController.clearLegacyHomeAssignment(this)
         if (securePrefs.isPaired && securePrefs.deviceToken.isNullOrBlank()) {
             securePrefs.clearCredentials()
@@ -112,13 +116,6 @@ class MainActivity : ComponentActivity() {
         applyDisplayOrientation(deviceConfigManager.orientation.value)
     }
 
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        if (securePrefs.kioskModeEnabled && securePrefs.isAuthenticated()) {
-            bringPlayerToForeground("kiosk.home")
-        }
-    }
-
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -146,15 +143,6 @@ class MainActivity : ComponentActivity() {
             KioskController.ensureLockTaskAllowed(this)
         }
         KioskController.applyIfPermitted(this, kioskRequested)
-    }
-
-    private fun bringPlayerToForeground(source: String) {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            putExtra(PlayerLaunchHelper.EXTRA_LAUNCH_SOURCE, source)
-        }
-        startActivity(intent)
     }
 
     private fun setupImmersiveMode() {

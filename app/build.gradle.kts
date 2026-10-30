@@ -21,13 +21,13 @@ android {
         applicationId = "com.orion.player"
         minSdk = 24
         targetSdk = 35
-        versionCode = 63
-        versionName = "1.0.62"
+        versionCode = 66
+        versionName = "1.0.65"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Default backend URL — override via BuildConfig or build flavors
-        buildConfigField("String", "BASE_URL", "\"https://orion-api-5dgf.onrender.com/api/\"")
+        buildConfigField("String", "BASE_URL", "\"https://d1i9m5txth9eo7.cloudfront.net/api/\"")
     }
 
     signingConfigs {

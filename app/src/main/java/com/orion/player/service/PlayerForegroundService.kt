@@ -40,9 +40,12 @@ import kotlinx.coroutines.launch
  * Production foreground service for 24x7 digital signage.
  *
  * Responsibilities:
- * - Keeps the process alive (protects playback, sync, PoP, cache, downloads)
+ * - Keeps the process alive while the player is open (playback, sync, PoP, cache, downloads)
  * - Runs an internal watchdog every 30 seconds
- * - Restarts activity or playback on failure without rebooting the device
+ * - Restarts playback on failure while the activity is on screen
+ *
+ * Closing the app from Back or Recents stops this service and leaves it stopped.
+ * Crash recovery and a remote restart command can still open the player again.
  */
 @AndroidEntryPoint
 class PlayerForegroundService : Service() {
@@ -62,6 +65,7 @@ class PlayerForegroundService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var watchdogStarted = false
     private var healthCheckCount = 0
+    private var userClosedTask = false
 
     private val healthCheckRunnable = object : Runnable {
         override fun run() {
@@ -104,7 +108,7 @@ class PlayerForegroundService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(healthCheckRunnable)
         releaseWakeLock()
-        val shouldRestart = securePrefs.isAuthenticated()
+        val shouldRestart = securePrefs.isAuthenticated() && !userClosedTask
         super.onDestroy()
         if (shouldRestart) {
             OrionRecoveryLogger.logForegroundServiceRestart("onDestroy")
@@ -114,10 +118,10 @@ class PlayerForegroundService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        if (securePrefs.isAuthenticated()) {
-            PlayerLaunchHelper.launchPlayer(applicationContext, "foreground.task_removed")
-        }
-        start(applicationContext)
+        userClosedTask = true
+        handler.removeCallbacks(healthCheckRunnable)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun performWatchdogCheck() {
@@ -149,31 +153,14 @@ class PlayerForegroundService : Service() {
         )
 
         if (!healthMonitor.isActivityAlive) {
-            recoverActivity()
             return
         }
-        throttle.reset(RecoveryThrottle.KEY_ACTIVITY_RESTART)
 
         if (healthMonitor.isPlaybackStuck()) {
             recoverPlayback()
         } else {
             throttle.reset(RecoveryThrottle.KEY_PLAYBACK_RESTART)
         }
-    }
-
-    private fun recoverActivity() {
-        val decision = throttle.evaluate(RecoveryThrottle.KEY_ACTIVITY_RESTART)
-        if (!decision.allowed) {
-            AutoStartLogger.watchdogRecoveryDeferred(
-                reason = "activity_not_alive",
-                retryInMs = decision.retryInMs,
-                attempts = decision.attempt
-            )
-            return
-        }
-        AutoStartLogger.watchdogRecovery("activity_not_alive", decision.attempt)
-        OrionRecoveryLogger.logActivityRestart("watchdog.activity_not_alive")
-        PlayerLaunchHelper.launchPlayer(applicationContext, "watchdog.activity_restart")
     }
 
     private fun recoverPlayback() {
