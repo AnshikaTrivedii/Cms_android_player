@@ -51,6 +51,7 @@ import com.orion.player.data.sync.SyncDiagnostics
 import com.orion.player.data.sync.SyncOutcome
 import com.orion.player.data.ticker.TickerDisplayConfig
 import com.orion.player.data.ticker.TickerStateStore
+import com.orion.player.data.update.AppUpdateManager
 import com.orion.player.util.NetworkMonitor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CompletableDeferred
@@ -91,7 +92,8 @@ class PlaybackViewModel @Inject constructor(
     private val activeScheduleTracker: ActiveScheduleTracker,
     private val assignedPlaylistStore: AssignedPlaylistStore,
     private val scheduleExpiryController: ScheduleExpiryController,
-    private val tickerStateStore: TickerStateStore
+    private val tickerStateStore: TickerStateStore,
+    private val appUpdateManager: AppUpdateManager
 ) : ViewModel() {
 
     companion object {
@@ -878,6 +880,7 @@ class PlaybackViewModel @Inject constructor(
             result = result
         )
         healthMonitor.recordSlotEnded()
+        appUpdateManager.installAtBoundary()
 
         if (applyPendingSnapshotIfAny()) {
             emitFullScreen()

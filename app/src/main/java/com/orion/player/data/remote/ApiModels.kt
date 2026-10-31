@@ -66,6 +66,9 @@ data class HeartbeatRequest(
     val timezone: String? = null,
     val androidVersion: String? = null,
     val playerVersion: String? = null,
+    val playerVersionCode: Int? = null,
+    val deviceOwner: Boolean? = null,
+    val silentUpdateCapable: Boolean? = null,
     val deviceModel: String? = null,
     val manufacturer: String? = null,
     val deviceName: String? = null,
@@ -110,6 +113,7 @@ data class DisplayConfig(
 
 data class HeartbeatResponse(
     val status: String,
+    val appUpdate: AppUpdateInfo? = null,
     val deviceStatus: String? = null,
     val contentRevision: String? = null,
     val syncRequired: Boolean? = null,
@@ -137,6 +141,26 @@ data class HeartbeatResponse(
     @SerializedName("serverNow") val serverNow: String? = null,
     @SerializedName("nextContentChangeAt") val nextContentChangeAt: String? = null,
     @SerializedName("cacheCommand") val cacheCommand: CacheCommandInfo? = null
+)
+
+data class AppUpdateInfo(
+    val releaseId: String,
+    val versionCode: Int,
+    val versionName: String?,
+    val sizeBytes: Long,
+    val sha256: String,
+    val downloadUrl: String
+)
+
+data class AppUpdateResponse(val appUpdate: AppUpdateInfo?)
+
+data class AppUpdateStatusRequest(
+    val releaseId: String,
+    val state: String,
+    val progress: Int? = null,
+    val error: String? = null,
+    val retryCount: Int? = null,
+    val installedVersionCode: Int? = null
 )
 
 data class PlayerFeatures(

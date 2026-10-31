@@ -31,6 +31,15 @@ interface OrionPlayerApi {
         @Body body: HeartbeatRequest
     ): HeartbeatResponse
 
+    @GET("player/app-update")
+    suspend fun getAppUpdate(@Header("Authorization") token: String): AppUpdateResponse
+
+    @POST("player/app-update-status")
+    suspend fun reportAppUpdate(
+        @Header("Authorization") token: String,
+        @Body body: AppUpdateStatusRequest
+    ): Unit
+
     @GET("player/sync")
     suspend fun syncPlaylist(
         @Header("Authorization") token: String,

@@ -8,6 +8,7 @@ import com.orion.player.data.repository.TelemetryRepository
 import com.orion.player.data.stability.StabilityMonitor
 import com.orion.player.data.sync.InitialSyncCoordinator
 import com.orion.player.data.sync.ServerPlayerSignals
+import com.orion.player.data.update.AppUpdateManager
 import com.orion.player.util.SessionGuard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +35,8 @@ class DeviceHeartbeatScheduler @Inject constructor(
     private val healthMonitor: PlayerHealthMonitor,
     private val remoteCommandExecutor: RemoteCommandExecutor,
     private val stabilityMonitor: StabilityMonitor,
-    private val initialSyncCoordinator: InitialSyncCoordinator
+    private val initialSyncCoordinator: InitialSyncCoordinator,
+    private val appUpdateManager: AppUpdateManager
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var heartbeatJob: Job? = null
@@ -74,6 +76,8 @@ class DeviceHeartbeatScheduler @Inject constructor(
 
         val response = telemetryRepository.sendHeartbeat(body)
         response?.let { mapped ->
+            appUpdateManager.observe(mapped.appUpdate)
+            appUpdateManager.onHeartbeatSuccess()
             initialSyncCoordinator.handleHeartbeatResponse(mapped)
             val commands = ServerPlayerSignals.from(mapped).mergedCommands()
             if (commands.isNotEmpty()) {

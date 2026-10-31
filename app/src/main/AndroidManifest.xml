@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <!-- Signage panels have no touchscreen and Android TV requires leanback to be declared.
          Both are optional so the same APK installs on tablets and TV boxes. -->
@@ -64,6 +66,18 @@
             android:directBootAware="true"
             android:enabled="true"
             android:exported="false" />
+
+        <receiver
+            android:name=".receiver.AppInstallResultReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".receiver.AppReplacedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Inert on a normal install. Used only for explicitly provisioned kiosk devices. -->
         <receiver

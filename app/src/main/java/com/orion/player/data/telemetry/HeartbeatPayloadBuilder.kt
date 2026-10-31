@@ -1,5 +1,7 @@
 package com.orion.player.data.telemetry
 
+import android.content.Context
+import com.orion.player.BuildConfig
 import com.orion.player.data.analytics.PopHealthTracker
 import com.orion.player.data.config.DeviceConfigManager
 import com.orion.player.data.enterprise.DeviceHealthReporter
@@ -8,13 +10,16 @@ import com.orion.player.data.enterprise.DevicePermissionReporter
 import com.orion.player.data.local.PopLogDao
 import com.orion.player.data.local.SecurePrefs
 import com.orion.player.data.recovery.PlayerHealthMonitor
+import com.orion.player.data.recovery.KioskController
 import com.orion.player.data.remote.HeartbeatRequest
 import com.orion.player.util.DeviceHealthUtil
 import javax.inject.Inject
 import javax.inject.Singleton
+import dagger.hilt.android.qualifiers.ApplicationContext
 
 @Singleton
 class HeartbeatPayloadBuilder @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val securePrefs: SecurePrefs,
     private val deviceHealthUtil: DeviceHealthUtil,
     private val deviceHealthReporter: DeviceHealthReporter,
@@ -63,6 +68,9 @@ class HeartbeatPayloadBuilder @Inject constructor(
                 timezone = metadata.timezone,
                 androidVersion = metadata.androidVersion,
                 playerVersion = metadata.playerVersion,
+                playerVersionCode = BuildConfig.VERSION_CODE,
+                deviceOwner = KioskController.isDeviceOwner(context),
+                silentUpdateCapable = KioskController.isDeviceOwner(context),
                 deviceModel = metadata.deviceModel,
                 manufacturer = metadata.manufacturer,
                 deviceName = metadata.deviceName,
